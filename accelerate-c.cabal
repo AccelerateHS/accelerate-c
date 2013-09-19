@@ -1,0 +1,58 @@
+Name:                   accelerate-c
+Version:                0.1.0.0
+Cabal-version:          >= 1.6
+Tested-with:            GHC >= 7.4
+Build-type:             Simple
+
+Synopsis:               Accelerate backend generating sequential C code
+Description:
+  This library implements a backend for the /Accelerate/ language generating sequential C code.
+
+License:                BSD3
+License-file:           LICENSE
+Author:                 Manuel M T Chakravarty
+Maintainer:             Manuel M T Chakravarty <chak@cse.unsw.edu.au>
+Bug-reports:            https://github.com/unsw-comp4181/accelerate-c/issues
+Homepage:               https://github.com/unsw-comp4181/accelerate-c
+
+Category:               Compilers/Interpreters, Data
+Stability:              Experimental
+
+-- Data-files:             cbits/accelerate_c_type.h
+
+Extra-source-files:     include/accelerate.h
+
+Library
+  Include-Dirs:         include
+
+  Build-depends:        accelerate              == 0.14.*,
+                        array                   >= 0.3,
+                        base                    == 4.*,
+                        directory               >= 1.0,
+                        language-c-quote        >= 0.4.4,
+                        mainland-pretty         >= 0.2,
+                        process                 >= 1.0,
+                        srcloc                  >= 0.2,
+                        template-haskell        >= 2.2
+
+  Exposed-modules:      Data.Array.Accelerate.C
+
+  Other-modules:        Data.Array.Accelerate.C.Base
+                        Data.Array.Accelerate.C.Exp
+                        Data.Array.Accelerate.C.Type
+
+  ghc-options:          -O2
+                        -Wall
+                        -fwarn-tabs
+
+  ghc-prof-options:     -auto-all
+
+  -- Don't add the extensions list here. Instead, place individual LANGUAGE
+  -- pragmas in the files that require a specific extension. This means the
+  -- project loads in GHCi, and avoids extension clashes.
+  --
+  -- Extensions:
+
+source-repository head
+  type:                 git
+  location:             https://github.com/unsw-comp4181/accelerate-c
