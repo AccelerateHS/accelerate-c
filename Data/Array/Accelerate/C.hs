@@ -27,7 +27,7 @@ import Text.PrettyPrint.Mainland as C
 import Language.C.Quote.C        as C
 
   -- accelerate
-import Data.Array.Accelerate.Analysis.Type
+import Data.Array.Accelerate.Analysis.Type as Sugar
 import Data.Array.Accelerate.Array.Sugar                (Elt(..))
 import Data.Array.Accelerate.Smart                      (Exp)
 import Data.Array.Accelerate.Trafo.Sharing              (convertExp)
@@ -47,7 +47,7 @@ runExpIO e
   = do
     { let e'    = convertExp True e
           ces   = expToC e'
-          ctys  = tupleTypeToC (expType e')
+          ctys  = tupleTypeToC (Sugar.expType e')
           cUnit = [cunit|
                     $ty:(head ctys) $id:cFunName ()
                     { 
@@ -56,7 +56,10 @@ runExpIO e
                   |]
     ; unless (length ces == 1) $
         error "Data.Array.Accelerate.C.runExpIO: result type may neither be unit nor a tuple"
-    ; writeFile cFile $ "#include \"HsFFI.h\"\n\n" ++ (show . C.ppr $ cUnit)
+    ; writeFile cFile $ 
+        "#include \"HsFFI.h\"\n" ++
+        "#include \"cbits/accelerate_c.h\"\n\n" ++
+        (show . C.ppr $ cUnit)
     ; ec <- system $ unwords $ [cCompiler, "-c", cOpts, "-I" ++ ffiLibDir, "-o", oFile, cFile]
     ; case ec of
         ExitFailure c -> error $ "Data.Array.Accelerate.C: C compiler failed with exit code " ++ show c

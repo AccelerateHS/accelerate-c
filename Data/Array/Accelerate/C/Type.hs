@@ -16,18 +16,28 @@
 --
 
 module Data.Array.Accelerate.C.Type (
+  expType,
   tupleTypeToC, scalarTypeToC, numTypeToC, integralTypeToC, floatingTypeToC, nonNumTypeToC
 ) where
 
   -- standard libraries
-import Data.Char
+-- import Data.Char
 
   -- libraries
 import Language.C         as C
 import Language.C.Quote.C as C
   
     -- accelerate
+import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Type
+import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
+
+
+-- Determine types
+-- ---------------
+
+expType :: PreExp OpenAcc aenv t -> [C.Type]
+expType = tupleTypeToC . Sugar.preExpType Sugar.accType
 
 
 -- Convert Accelerate to C types
