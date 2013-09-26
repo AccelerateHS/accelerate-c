@@ -25,7 +25,7 @@ Extra-source-files:     include/accelerate.h
 Library
   Include-Dirs:         include
 
-  Build-depends:        accelerate              == 0.14.*,
+  Build-depends:        accelerate              >= 0.13,
                         array                   >= 0.3,
                         base                    == 4.*,
                         directory               >= 1.0,
