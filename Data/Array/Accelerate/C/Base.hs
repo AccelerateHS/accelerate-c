@@ -16,6 +16,7 @@
 
 module Data.Array.Accelerate.C.Base (
   Name,
+--  Val(..), prj,
   cvar, ccall, cchar, cintegral, cbool
 ) where
 
@@ -31,6 +32,22 @@ import Language.C.Quote.C as C
 -- -----
 
 type Name = String
+
+{-
+-- Valuations
+-- ----------
+
+-- Valuating variables with tuples of C variable names.
+--
+data Val env where
+  Empty ::                      Val ()
+  Push  :: Val env -> [Name] -> Val (env, s)
+
+prj :: Idx env t -> Val env -> [Name]
+prj ZeroIdx      (Push _   v) = v
+prj (SuccIdx ix) (Push val _) = prj ix val
+prj _            _            = error "D.A.A.C.Base: inconsistent valuation"
+-}
 
 -- Common expression forms
 -- -----------------------

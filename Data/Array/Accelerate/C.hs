@@ -72,12 +72,13 @@ runExpIO e
     ; unless (length ces == 1) $
         error "Data.Array.Accelerate.C.runExpIO: result type may neither be unit nor a tuple"
 
-    ; tmpPath <- getTemporaryDirectory >>= mkdtemp
+    ; tmpPath <- addTrailingPathSeparator <$> getTemporaryDirectory >>= mkdtemp
     ; logMsgLn $ "Data.Array.Accelerate.C: temporary directory: " ++ tmpPath
     ; let cFilePath = tmpPath </> cFile
           oFilePath = tmpPath </> oFile
     ; writeFile cFilePath $ 
         "#include <stdlib.h>\n" ++
+        "#include <math.h>\n" ++
         "#include \"HsFFI.h\"\n" ++
 --        "#include \"cbits/accelerate_c.h\"\n\n" ++
         (show . C.ppr $ cUnit)

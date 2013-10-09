@@ -59,7 +59,6 @@ expToC = expToC'
     expToC' e@(Prj i t)     = prjToC i t e
     expToC' (Cond p t e)    = condToC p t e
     -- Iterate n f x           -> iterate n f x env
-    -- --        While p f x             -> while p f x env
     -- 
     -- -- Shapes and indices
     -- IndexNil                -> return []
@@ -107,18 +106,21 @@ expToC = expToC'
       subset $ expToC' t
 
     -- Scalar conditionals. To keep the return type as an expression list we use
-    -- the ternery C condition operator (?:). For tuples this is not
-    -- particularly good, so the least we can do is make sure the predicate
-    -- result is evaluated only once and bound to a local variable.
+    -- the ternery C condition operator (?:). 
     --
-    condToC :: Exp () Bool
+    -- FIXME: For tuples this is not particularly good, so the least we can do is make sure the predicate
+    -- result is evaluated only once and bind it to a local variable.
+    --
+    condToC :: forall t. Elt t 
+            => Exp () Bool
             -> Exp () t
             -> Exp () t
             -> [C.Exp]
-    condToC p t e = error "cond" {- do
-      p'        <- expToC p 
-      ok        <- single "Cond" <$> pushEnv p p'
-      zipWith (\a b -> [cexp| $exp:ok ? $exp:a : $exp:b |]) <$> cvtE t env <*> cvtE e env -}
+    condToC p t e
+      = let
+          [pC] = expToC' p    -- type guarantees singleton
+        in
+        zipWith (\tiC eiC -> [cexp| $exp:pC ? $exp:tiC : $exp:eiC |]) (expToC' t) (expToC' e)
 
 
 -- Tuples
@@ -199,7 +201,7 @@ primToC PrimChr                  [a]   = chrToC a
 primToC PrimBoolToInt            [a]   = boolToIntToC a
 primToC (PrimFromIntegral ta tb) [a]   = fromIntegralToC ta tb a
 primToC _ _ = -- If the argument lists are not the correct length
-  error "D.A.A.C.Exp.codegenPrim: inconsistent valuation"
+  error "D.A.A.C.Exp.primToC: inconsistent valuation"
 
 -- Constants and numeric types
 -- ---------------------------
