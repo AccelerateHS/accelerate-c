@@ -36,8 +36,8 @@ import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 -- Determine types
 -- ---------------
 
-expType :: PreExp OpenAcc aenv t -> [C.Type]
-expType = tupleTypeToC . Sugar.preExpType Sugar.accType
+expType :: OpenExp env aenv t -> [C.Type]
+expType = tupleTypeToC . Sugar.expType
 
 
 -- Convert Accelerate to C types

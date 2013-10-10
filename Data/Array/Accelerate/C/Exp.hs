@@ -32,6 +32,7 @@ import Language.C.Quote.C as C
   -- accelerate
 import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.Pretty
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Type
 
@@ -44,20 +45,26 @@ import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 -- Generating C code from scalar Accelerate expressions
 -- ----------------------------------------------------
 
+-- De Bruijn level to name variables.
+--
+type Level = Int
+
 -- Produces a list of expression whose length corresponds to the number of tuple components of the result type.
 --
 expToC :: Elt t => Exp () t -> [C.Exp]
-expToC = expToC'
+expToC = expToC' 0
   where
-    expToC' :: forall t. Elt t => Exp () t -> [C.Exp]
-    -- Let bnd body            -> elet bnd body env
-    -- Var ix                  -> return $ prj ix env
-    expToC' (PrimConst c)   = [primConstToC c]
-    expToC' (Const c)       = constToC (eltType (undefined::t)) c
-    expToC' (PrimApp f arg) = [primToC f $ expToC' arg]
-    expToC' (Tuple t)       = tupToC t 
-    expToC' e@(Prj i t)     = prjToC i t e
-    expToC' (Cond p t e)    = condToC p t e
+    expToC' :: forall t aenv env. Elt t => Level -> OpenExp aenv env t -> [C.Exp]
+    expToC' lvl  (Let bnd body)  = elet lvl bnd body
+    expToC' lvl  (Var idx)       = [ [cexp| $id:("x" ++ show (lvl - idxToInt idx - 1) ++ "_" ++ show i) |] 
+                                   | i <- [0..sizeTupleType (eltType (undefined::t)) - 1]
+                                   ]
+    expToC' _lvl (PrimConst c)   = [primConstToC c]
+    expToC' _lvl (Const c)       = constToC (eltType (undefined::t)) c
+    expToC' lvl  (PrimApp f arg) = [primToC f $ expToC' lvl arg]
+    expToC' lvl  (Tuple t)       = tupToC lvl t 
+    expToC' lvl  e@(Prj i t)     = prjToC lvl i t e
+    expToC' lvl  (Cond p t e)    = condToC lvl p t e
     -- Iterate n f x           -> iterate n f x env
     -- 
     -- -- Shapes and indices
@@ -81,29 +88,47 @@ expToC = expToC'
     -- --Foreign function
     -- Foreign ff _ e          -> foreignE ff e env
 
+    -- Scalar let expressions evaluate their terms and generate new (const) variable bindings to store these results.
+    -- Variable names are unambiguously based on the de Bruijn indices and the index of the tuple component they
+    -- represent.
+    --
+    -- FIXME: Currently we need to push lets into each binding, as we don't have a statement sequence as the prelude
+    --   to the list of expressions that this function returns.
+    --
+    elet :: (Elt t, Elt t') => Level -> OpenExp env aenv t -> OpenExp (env, t) aenv t' -> [C.Exp]
+    elet lvl bnd body
+      = map (\bodyiC -> [cexp| ({ $items:inits $exp:bodyiC; }) |]) (expToC' (lvl + 1) body)
+      where
+        name  = "x" ++ show lvl
+        inits = zipWith3 bindOneComponent [0::Int ..] (expType bnd) (expToC' lvl bnd)
+        
+        bindOneComponent i tyiC bndiC = [citem| $ty:tyiC $id:(name ++ "_" ++ show i) = $exp:bndiC; |]
+
     -- Convert an open expression into a sequence of C expressions. We retain
     -- snoc-list ordering, so the element at tuple index zero is at the end of
     -- the list. Note that nested tuple structures are flattened.
     --
-    tupToC :: Tuple (Exp ()) t -> [C.Exp]
-    tupToC NilTup        = []
-    tupToC (SnocTup t e) = tupToC t ++ expToC' e
+    tupToC :: Level -> Tuple (OpenExp env aenv) t -> [C.Exp]
+    tupToC _lvl NilTup        = []
+    tupToC lvl  (SnocTup t e) = tupToC lvl t ++ expToC' lvl e
 
     -- Project out a tuple index. Since the nested tuple structure is flattened,
     -- this actually corresponds to slicing out a subset of the list of C
     -- expressions, rather than picking out a single element.
     --
-    prjToC :: forall t e. Elt t => TupleIdx (TupleRepr t) e
-           -> Exp () t
-           -> Exp () e
+    prjToC :: Elt t 
+           => Level
+           -> TupleIdx (TupleRepr t) e
+           -> OpenExp env aenv t
+           -> OpenExp env aenv e
            -> [C.Exp]
-    prjToC ix t e =
+    prjToC lvl ix t e =
       let subset = reverse
                  . take (length      $ expType e)
                  . drop (prjToInt ix $ Sugar.preExpType Sugar.accType t)
                  . reverse
       in
-      subset $ expToC' t
+      subset $ expToC' lvl t
 
     -- Scalar conditionals. To keep the return type as an expression list we use
     -- the ternery C condition operator (?:). 
@@ -111,17 +136,17 @@ expToC = expToC'
     -- FIXME: For tuples this is not particularly good, so the least we can do is make sure the predicate
     -- result is evaluated only once and bind it to a local variable.
     --
-    condToC :: forall t. Elt t 
-            => Exp () Bool
-            -> Exp () t
-            -> Exp () t
+    condToC :: Elt t 
+            => Level
+            -> OpenExp env anev Bool
+            -> OpenExp env aenv t
+            -> OpenExp env aenv t
             -> [C.Exp]
-    condToC p t e
-      = let
-          [pC] = expToC' p    -- type guarantees singleton
-        in
-        zipWith (\tiC eiC -> [cexp| $exp:pC ? $exp:tiC : $exp:eiC |]) (expToC' t) (expToC' e)
-
+    condToC lvl p t e
+      = zipWith (\tiC eiC -> [cexp| $exp:pC ? $exp:tiC : $exp:eiC |]) (expToC' lvl t) (expToC' lvl e)
+      where
+        [pC] = expToC' lvl p    -- type guarantees singleton
+        
 
 -- Tuples
 -- ------
@@ -132,13 +157,14 @@ expToC = expToC'
 --
 prjToInt :: TupleIdx t e -> TupleType a -> Int
 prjToInt ZeroTupIdx     _                 = 0
-prjToInt (SuccTupIdx i) (b `PairTuple` a) = sizeTupleType a + prjToInt i b
-prjToInt _              _                 = error "D.A.A.C.Exp.prjToInt: inconsistent valuation"
+prjToInt (SuccTupIdx i) (b `PairTuple` a) = prjToInt i b + sizeTupleType a
+prjToInt _              t                 = error $ "D.A.A.C.Exp.prjToInt: inconsistent tuple index: " ++ show t
 
 sizeTupleType :: TupleType a -> Int
 sizeTupleType UnitTuple       = 0
 sizeTupleType (SingleTuple _) = 1
 sizeTupleType (PairTuple a b) = sizeTupleType a + sizeTupleType b
+
 
 -- Primtive functions
 -- ------------------
@@ -200,8 +226,11 @@ primToC PrimOrd                  [a]   = ordToC a
 primToC PrimChr                  [a]   = chrToC a
 primToC PrimBoolToInt            [a]   = boolToIntToC a
 primToC (PrimFromIntegral ta tb) [a]   = fromIntegralToC ta tb a
-primToC _ _ = -- If the argument lists are not the correct length
-  error "D.A.A.C.Exp.primToC: inconsistent valuation"
+primToC p args = -- If the argument lists are not the correct length
+  error $ 
+    "D.A.A.C.Exp.primToC: inconsistent argument count: '" ++ (show . snd . prettyPrim $ p) ++ "' with " ++ 
+    show (length args) ++ " argument(s)"
+
 
 -- Constants and numeric types
 -- ---------------------------
