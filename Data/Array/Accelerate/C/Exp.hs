@@ -31,6 +31,7 @@ import Language.C.Quote.C as C
 
   -- accelerate
 import Data.Array.Accelerate.Array.Sugar
+import Data.Array.Accelerate.Array.Representation (SliceIndex(..))
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Pretty
 import Data.Array.Accelerate.Tuple
@@ -66,17 +67,17 @@ expToC = expToC' 0
     expToC' lvl  e@(Prj i t)     = prjToC lvl i t e
     expToC' lvl  (Cond p t e)    = condToC lvl p t e
     -- Iterate n f x           -> iterate n f x env
-    -- 
-    -- -- Shapes and indices
-    -- IndexNil                -> return []
-    -- IndexAny                -> return []
-    -- IndexCons sh sz         -> (++) <$> cvtE sh env <*> cvtE sz env
-    -- IndexHead ix            -> return . last <$> cvtE ix env
-    -- IndexTail ix            ->          init <$> cvtE ix env
-    -- IndexSlice ix slix sh   -> indexSlice ix slix sh env
-    -- IndexFull  ix slix sl   -> indexFull  ix slix sl env
-    -- ToIndex sh ix           -> toIndex   sh ix env
-    -- FromIndex sh ix         -> fromIndex sh ix env
+    
+    -- Shapes and indices
+    expToC' _lvl IndexNil                = []
+    expToC' _lvl IndexAny                = []
+    expToC' lvl  (IndexCons sh sz)       = expToC' lvl sh ++ expToC' lvl sz
+    expToC' lvl  (IndexHead ix)          = [last $ expToC' lvl ix]
+    expToC' lvl  (IndexTail ix)          = init $ expToC' lvl ix
+    expToC' lvl  (IndexSlice ix slix sh) = indexSlice ix (expToC' lvl slix) (expToC' lvl sh)
+    expToC' lvl  (IndexFull  ix slix sl) = indexFull  ix (expToC' lvl slix) (expToC' lvl sl)
+    expToC' lvl  (ToIndex sh ix)         = toIndexToC   (expToC' lvl sh) (expToC' lvl ix)
+    expToC' lvl  (FromIndex sh ix)       = fromIndexToC (expToC' lvl sh) (expToC' lvl ix)
     -- 
     -- -- Arrays and indexing
     -- Index acc ix            -> index acc ix env
@@ -164,6 +165,52 @@ sizeTupleType :: TupleType a -> Int
 sizeTupleType UnitTuple       = 0
 sizeTupleType (SingleTuple _) = 1
 sizeTupleType (PairTuple a b) = sizeTupleType a + sizeTupleType b
+
+-- Shapes and indices
+-- ------------------
+
+-- Restrict indices based on a slice specification. In the 'SliceAll' case we elide the 'IndexAny' from the head
+-- of slx, as this is not represented by any C term (Any ~ []).
+--
+indexSlice :: SliceIndex slix' sl co sh' -> [C.Exp] -> [C.Exp] -> [C.Exp]
+indexSlice sliceIdx slix sh =
+  let restrict :: SliceIndex slix sl co sh -> [C.Exp] -> [C.Exp] -> [C.Exp]
+      restrict SliceNil              _       _       = []
+      restrict (SliceAll   sliceIdx) slx     (sz:sl) = sz : restrict sliceIdx slx sl
+      restrict (SliceFixed sliceIdx) (_:slx) ( _:sl) =      restrict sliceIdx slx sl
+      restrict _ _ _ = error "D.A.A.C.Exp.indexSlice: unexpected shapes"
+  in
+  reverse $ restrict sliceIdx (reverse slix) (reverse sh)
+
+-- Extend indices based on a slice specification. In the SliceAll case we
+-- elide the presence of Any from the head of slx.
+--
+indexFull :: SliceIndex slix' sl' co sh -> [C.Exp] -> [C.Exp] -> [C.Exp]
+indexFull sliceIdx slix sl =
+  let extend :: SliceIndex slix sl co sh -> [C.Exp] -> [C.Exp] -> [C.Exp]
+      extend SliceNil              _        _       = []
+      extend (SliceAll   sliceIdx) slx      (sz:sh) = sz : extend sliceIdx slx sh
+      extend (SliceFixed sliceIdx) (sz:slx) sh      = sz : extend sliceIdx slx sh
+      extend _ _ _ = error "D.A.A.C.Exp.indexFull: unexpected shapes"
+  in
+  reverse $ extend sliceIdx (reverse slix) (reverse sl)
+
+-- Convert between linear and multidimensional indices.
+--
+toIndexToC :: [C.Exp] -> [C.Exp] -> [C.Exp]
+toIndexToC sh ix = [ccall "toIndex" [ccall "shape" sh, ccall "shape" ix]]
+
+-- For the multidimensional case, we've inlined the definition of 'fromIndex' because we need to return an expression
+-- for each component.
+--
+fromIndexToC :: [C.Exp] -> [C.Exp] -> [C.Exp]
+fromIndexToC sh ix
+  = reverse $ fromIndex' (reverse sh) (head ix)     -- types ensure that 'ix' is a singleton
+  where
+    fromIndex' :: [C.Exp] -> C.Exp -> [C.Exp]
+    fromIndex' []     _ = []
+    fromIndex' [_]    i = [i]
+    fromIndex' (d:ds) i = [cexp| $exp:i % $exp:d |] : fromIndex' ds [cexp| $exp:i / $exp:d |]
 
 
 -- Primtive functions

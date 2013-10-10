@@ -1,5 +1,5 @@
 Name:                   accelerate-c
-Version:                0.1.2.0
+Version:                0.2.0.0
 Cabal-version:          >= 1.6
 Tested-with:            GHC >= 7.4
 Build-type:             Simple
@@ -44,6 +44,7 @@ Library
   ghc-options:          -O2
                         -Wall
                         -fwarn-tabs
+                        -fno-warn-name-shadowing
 
   ghc-prof-options:     -auto-all
 
