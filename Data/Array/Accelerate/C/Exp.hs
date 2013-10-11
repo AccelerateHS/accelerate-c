@@ -53,7 +53,7 @@ expToC = expToC' Empty Empty
   where
     expToC' :: forall t env aenv. Elt t => Val env -> Val aenv -> OpenExp env aenv t -> [C.Exp]
     expToC' env  aenv  (Let bnd body)     = elet env aenv bnd body
-    expToC' env  aenv  (Var idx)          = [ [cexp| $id:name |] | name <- prj idx env]
+    expToC' env  _aenv (Var idx)          = [ [cexp| $id:name |] | name <- prj idx env]
     expToC' _env _aenv (PrimConst c)      = [primConstToC c]
     expToC' _env _aenv (Const c)          = constToC (eltType (undefined::t)) c
     expToC' env  aenv  (PrimApp f arg)    = [primToC f $ expToC' env aenv arg]
