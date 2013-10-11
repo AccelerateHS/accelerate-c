@@ -20,9 +20,6 @@ module Data.Array.Accelerate.C.Type (
   tupleTypeToC, scalarTypeToC, numTypeToC, integralTypeToC, floatingTypeToC, nonNumTypeToC
 ) where
 
-  -- standard libraries
--- import Data.Char
-
   -- libraries
 import Language.C         as C
 import Language.C.Quote.C as C

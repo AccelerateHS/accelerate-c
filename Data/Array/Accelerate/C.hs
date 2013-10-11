@@ -80,7 +80,6 @@ runExpIO e
         "#include <stdlib.h>\n" ++
         "#include <math.h>\n" ++
         "#include \"HsFFI.h\"\n" ++
---        "#include \"cbits/accelerate_c.h\"\n\n" ++
         (show . C.ppr $ cUnit)
     ; logMsg "Data.Array.Accelerate.C: runExpIO: compiling..."
     ; ec <- system $ unwords $ [cCompiler, "-c", cOpts, "-I" ++ ffiLibDir, "-o", oFilePath, cFilePath]
@@ -167,6 +166,7 @@ cCompiler :: FilePath
 cCompiler = "cc"
 
 cOpts :: String
+-- cOpts = "-O2 -w"
 cOpts = "-O2"
 
 -- IMPORTANT: check this path!

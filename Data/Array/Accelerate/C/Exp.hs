@@ -56,17 +56,17 @@ expToC :: Elt t => Exp () t -> [C.Exp]
 expToC = expToC' 0
   where
     expToC' :: forall t aenv env. Elt t => Level -> OpenExp aenv env t -> [C.Exp]
-    expToC' lvl  (Let bnd body)  = elet lvl bnd body
-    expToC' lvl  (Var idx)       = [ [cexp| $id:("x" ++ show (lvl - idxToInt idx - 1) ++ "_" ++ show i) |] 
-                                   | i <- [0..sizeTupleType (eltType (undefined::t)) - 1]
-                                   ]
-    expToC' _lvl (PrimConst c)   = [primConstToC c]
-    expToC' _lvl (Const c)       = constToC (eltType (undefined::t)) c
-    expToC' lvl  (PrimApp f arg) = [primToC f $ expToC' lvl arg]
-    expToC' lvl  (Tuple t)       = tupToC lvl t 
-    expToC' lvl  e@(Prj i t)     = prjToC lvl i t e
-    expToC' lvl  (Cond p t e)    = condToC lvl p t e
-    -- Iterate n f x           -> iterate n f x env
+    expToC' lvl  (Let bnd body)     = elet lvl bnd body
+    expToC' lvl  (Var idx)          = [ [cexp| $id:("x" ++ show (lvl - idxToInt idx - 1) ++ "_" ++ show i) |] 
+                                      | i <- [0..sizeTupleType (eltType (undefined::t)) - 1]
+                                      ]
+    expToC' _lvl (PrimConst c)      = [primConstToC c]
+    expToC' _lvl (Const c)          = constToC (eltType (undefined::t)) c
+    expToC' lvl  (PrimApp f arg)    = [primToC f $ expToC' lvl arg]
+    expToC' lvl  (Tuple t)          = tupToC lvl t 
+    expToC' lvl  e@(Prj i t)        = prjToC lvl i t e
+    expToC' lvl  (Cond p t e)       = condToC lvl p t e
+    expToC' lvl  (Iterate _n _f _x) = error "D.A.A.C.Exp: 'Iterate' not supported"
     
     -- Shapes and indices
     expToC' _lvl IndexNil                = []
@@ -87,7 +87,7 @@ expToC = expToC' 0
     -- Intersect sh1 sh2       -> intersect sh1 sh2 env
     -- 
     -- --Foreign function
-    -- Foreign ff _ e          -> foreignE ff e env
+    expToC' _lvl (Foreign _ff _ _e) = error "D.A.A.C.Exp: 'Foreign' not supported"
 
     -- Scalar let expressions evaluate their terms and generate new (const) variable bindings to store these results.
     -- Variable names are unambiguously based on the de Bruijn indices and the index of the tuple component they
@@ -225,18 +225,26 @@ primToC (PrimAbs             ty) [a]   = absToC ty a
 primToC (PrimSig             ty) [a]   = sigToC ty a
 primToC (PrimQuot             _) [a,b] = [cexp|$exp:a / $exp:b|]
 primToC (PrimRem              _) [a,b] = [cexp|$exp:a % $exp:b|]
-primToC (PrimIDiv            ty) [a,b] = ccall "idiv" [ccast (NumScalarType $ IntegralNumType ty) a,
-                                                       ccast (NumScalarType $ IntegralNumType ty) b]
-primToC (PrimMod             ty) [a,b] = ccall "mod"  [ccast (NumScalarType $ IntegralNumType ty) a,
-                                                       ccast (NumScalarType $ IntegralNumType ty) b]
+primToC (PrimIDiv            ty) [a,b] | isSignedIntegralType ty
+                                       = idiv  ty (ccast (NumScalarType $ IntegralNumType ty) a)
+                                                  (ccast (NumScalarType $ IntegralNumType ty) b)
+                                       | otherwise
+                                       = uidiv ty (ccast (NumScalarType $ IntegralNumType ty) a)
+                                                  (ccast (NumScalarType $ IntegralNumType ty) b)
+primToC (PrimMod             ty) [a,b] | isSignedIntegralType ty
+                                       = imod  ty (ccast (NumScalarType $ IntegralNumType ty) a)
+                                                  (ccast (NumScalarType $ IntegralNumType ty) b)
+                                       | otherwise
+                                       = uimod ty (ccast (NumScalarType $ IntegralNumType ty) a)
+                                                  (ccast (NumScalarType $ IntegralNumType ty) b)
 primToC (PrimBAnd             _) [a,b] = [cexp|$exp:a & $exp:b|]
 primToC (PrimBOr              _) [a,b] = [cexp|$exp:a | $exp:b|]
 primToC (PrimBXor             _) [a,b] = [cexp|$exp:a ^ $exp:b|]
 primToC (PrimBNot             _) [a]   = [cexp|~ $exp:a|]
 primToC (PrimBShiftL          _) [a,b] = [cexp|$exp:a << $exp:b|]
 primToC (PrimBShiftR          _) [a,b] = [cexp|$exp:a >> $exp:b|]
-primToC (PrimBRotateL         _) [a,b] = ccall "rotateL" [a,b]
-primToC (PrimBRotateR         _) [a,b] = ccall "rotateR" [a,b]
+primToC (PrimBRotateL        ty) [a,b] = rotateL ty a b
+primToC (PrimBRotateR        ty) [a,b] = rotateR ty a b
 primToC (PrimFDiv             _) [a,b] = [cexp|$exp:a / $exp:b|]
 primToC (PrimRecip           ty) [a]   = recipToC ty a
 primToC (PrimSin             ty) [a]   = ccall (FloatingNumType ty `postfix` "sin")   [a]
@@ -435,3 +443,15 @@ postfix :: NumType a -> String -> String
 postfix (FloatingNumType (TypeFloat  _)) x = x ++ "f"
 postfix (FloatingNumType (TypeCFloat _)) x = x ++ "f"
 postfix _                                x = x
+
+isSignedIntegralType :: IntegralType a -> Bool 
+isSignedIntegralType (TypeWord{})    = False
+isSignedIntegralType (TypeWord8{})   = False
+isSignedIntegralType (TypeWord16{})  = False
+isSignedIntegralType (TypeWord32{})  = False
+isSignedIntegralType (TypeWord64{})  = False
+isSignedIntegralType (TypeCUShort{}) = False
+isSignedIntegralType (TypeCUInt{})   = False
+isSignedIntegralType (TypeCULong{})  = False
+isSignedIntegralType (TypeCULLong{}) = False
+isSignedIntegralType _               = True

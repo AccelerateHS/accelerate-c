@@ -17,15 +17,21 @@
 module Data.Array.Accelerate.C.Base (
   Name,
 --  Val(..), prj,
-  cvar, ccall, cchar, cintegral, cbool
+  cvar, ccall, cchar, cintegral, cbool,
+  rotateL, rotateR, idiv, uidiv, imod, uimod,
+  cdim, cshape, {- shapeSize, indexHead -}
 ) where
-
-  -- standard libraries
 
   -- libraries
 import qualified 
        Language.C         as C
 import Language.C.Quote.C as C
+
+  -- accelerate
+import Data.Array.Accelerate.Type
+
+  -- friends
+import Data.Array.Accelerate.C.Type
 
 
 -- Names
@@ -66,3 +72,84 @@ cintegral n = [cexp|$int:n|]
 
 cbool :: Bool -> C.Exp
 cbool = cintegral . fromEnum
+
+
+-- Arithmetic logic function support
+-- ---------------------------------
+
+-- Left/Right bitwise rotation
+--
+rotateL, rotateR :: IntegralType a -> C.Exp -> C.Exp -> C.Exp
+
+rotateL ty x i
+  = [cexp|
+      ({
+        const $ty:(integralTypeToC ty) x = $exp:x;
+        const typename HsInt32 i8 = $exp:i & 8 * sizeof(x) - 1;
+        i8 == 0 ? x : x << i8 | x >> 8 * sizeof(x) - i8;
+      })
+    |]
+
+rotateR ty x i
+  = [cexp|
+      ({
+        const $ty:(integralTypeToC ty) x = $exp:x;
+        const typename HsInt32 i8 = $exp:i & 8 * sizeof(x) - 1;
+        i8 == 0 ? x : x >> i8 | x << 8 * sizeof(x) - i8;
+      })
+    |]
+
+-- Integer division, truncated towards negative infinity
+--
+idiv, uidiv :: IntegralType a -> C.Exp -> C.Exp -> C.Exp
+
+idiv ty x y
+  = [cexp| 
+      ({
+        const $ty:(integralTypeToC ty) x = $exp:x;
+        const $ty:(integralTypeToC ty) y = $exp:y;
+        x > 0 && y < 0 ? (x - y - 1) / y : (x < 0 && y > 0 ? (x - y + 1) / y : x / y);
+      })
+    |]
+
+uidiv _ty x y = [cexp| $exp:x / $exp:y |]
+
+-- Integer modulus, Haskell style
+--
+imod, uimod :: IntegralType a -> C.Exp -> C.Exp -> C.Exp
+
+imod ty x y 
+  = [cexp| 
+      ({
+        const $ty:(integralTypeToC ty) x = $exp:x;
+        const $ty:(integralTypeToC ty) y = $exp:y;
+        const $ty:(integralTypeToC ty) r = x % y;
+        x > 0 && y < 0 || x < 0 && y > 0 ? (r != 0 ? r + y : 0) : r;
+      })
+    |]
+
+uimod _ty x y = [cexp| $exp:x % $exp:y |]
+
+
+-- Shape and indices support
+-- -------------------------
+
+cdim :: Name -> Int -> C.Definition
+cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
+
+-- Disassemble a struct-shape into a list of expressions accessing the fields
+cshape :: Int -> C.Exp -> [C.Exp]
+cshape dim sh
+  | dim == 0  = []
+  | dim == 1  = [sh]
+  | otherwise = map (\i -> [cexp|$exp:sh . $id:('a':show i)|]) [dim-1, dim-2 .. 0]
+
+{-
+-- Calculate the size of a shape from its component dimensions
+shapeSize :: Rvalue r => [r] -> C.Exp
+shapeSize [] = [cexp| 1 |]
+shapeSize ss = foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
+
+indexHead :: Rvalue r => [r] -> C.Exp
+indexHead = rvalue . last
+-}
