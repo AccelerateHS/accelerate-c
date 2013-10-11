@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE QuasiQuotes #-}
 
 -- |
@@ -16,7 +17,7 @@
 
 module Data.Array.Accelerate.C.Base (
   Name,
---  Val(..), prj,
+  Val(..), prj, valSize, push,
   cvar, ccall, cchar, cintegral, cbool,
   rotateL, rotateR, idiv, uidiv, imod, uimod,
   cdim, cshape, {- shapeSize, indexHead -}
@@ -29,6 +30,8 @@ import Language.C.Quote.C as C
 
   -- accelerate
 import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Array.Sugar (EltRepr)
+import Data.Array.Accelerate.AST         (Idx(..))
 
   -- friends
 import Data.Array.Accelerate.C.Type
@@ -39,11 +42,12 @@ import Data.Array.Accelerate.C.Type
 
 type Name = String
 
-{-
 -- Valuations
 -- ----------
 
--- Valuating variables with tuples of C variable names.
+-- Valuating variables with lists of C variable names.
+--
+-- The length of variable names list corresponds to the number of tuple components of the represented value.
 --
 data Val env where
   Empty ::                      Val ()
@@ -53,7 +57,26 @@ prj :: Idx env t -> Val env -> [Name]
 prj ZeroIdx      (Push _   v) = v
 prj (SuccIdx ix) (Push val _) = prj ix val
 prj _            _            = error "D.A.A.C.Base: inconsistent valuation"
--}
+
+-- Determine the size of an environment.
+--
+valSize :: Val env -> Int
+valSize Empty        = 0
+valSize (Push env _) = 1 + valSize env
+
+-- Extend the given valuation by one more variable of type 't'.
+--
+-- In addition to the extended valuation, yield the list of newly introduced names. The length of the list corresponds
+-- to the number of tuple components of 't'. The names are based on the current size of the environment and the tuple
+-- component represented by a given name.
+--
+push :: Val env -> TupleType (EltRepr t) -> ([Name], Val (env, t))
+push env ty
+  = (names, env `Push` names)
+  where
+    name  = "x" ++ show (valSize env)
+    names = [name ++ "_" ++ show i | i <- [(0::Int)..sizeTupleType ty - 1]]
+
 
 -- Common expression forms
 -- -----------------------

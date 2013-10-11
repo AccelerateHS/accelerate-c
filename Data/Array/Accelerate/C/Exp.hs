@@ -32,7 +32,7 @@ import Language.C.Quote.C as C
   -- accelerate
 import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.Array.Representation (SliceIndex(..))
-import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.AST                  hiding (Val(..), prj)
 import Data.Array.Accelerate.Pretty
 import Data.Array.Accelerate.Tuple
 import Data.Array.Accelerate.Type
@@ -46,38 +46,32 @@ import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 -- Generating C code from scalar Accelerate expressions
 -- ----------------------------------------------------
 
--- De Bruijn level to name variables.
---
-type Level = Int
-
 -- Produces a list of expression whose length corresponds to the number of tuple components of the result type.
 --
 expToC :: Elt t => Exp () t -> [C.Exp]
-expToC = expToC' 0
+expToC = expToC' Empty Empty
   where
-    expToC' :: forall t aenv env. Elt t => Level -> OpenExp aenv env t -> [C.Exp]
-    expToC' lvl  (Let bnd body)     = elet lvl bnd body
-    expToC' lvl  (Var idx)          = [ [cexp| $id:("x" ++ show (lvl - idxToInt idx - 1) ++ "_" ++ show i) |] 
-                                      | i <- [0..sizeTupleType (eltType (undefined::t)) - 1]
-                                      ]
-    expToC' _lvl (PrimConst c)      = [primConstToC c]
-    expToC' _lvl (Const c)          = constToC (eltType (undefined::t)) c
-    expToC' lvl  (PrimApp f arg)    = [primToC f $ expToC' lvl arg]
-    expToC' lvl  (Tuple t)          = tupToC lvl t 
-    expToC' lvl  e@(Prj i t)        = prjToC lvl i t e
-    expToC' lvl  (Cond p t e)       = condToC lvl p t e
-    expToC' lvl  (Iterate _n _f _x) = error "D.A.A.C.Exp: 'Iterate' not supported"
+    expToC' :: forall t env aenv. Elt t => Val env -> Val aenv -> OpenExp env aenv t -> [C.Exp]
+    expToC' env  aenv  (Let bnd body)     = elet env aenv bnd body
+    expToC' env  aenv  (Var idx)          = [ [cexp| $id:name |] | name <- prj idx env]
+    expToC' _env _aenv (PrimConst c)      = [primConstToC c]
+    expToC' _env _aenv (Const c)          = constToC (eltType (undefined::t)) c
+    expToC' env  aenv  (PrimApp f arg)    = [primToC f $ expToC' env aenv arg]
+    expToC' env  aenv  (Tuple t)          = tupToC env aenv t 
+    expToC' env  aenv  e@(Prj i t)        = prjToC env aenv i t e
+    expToC' env  aenv  (Cond p t e)       = condToC env aenv p t e
+    expToC' _env _aenv (Iterate _n _f _x) = error "D.A.A.C.Exp: 'Iterate' not supported"
     
     -- Shapes and indices
-    expToC' _lvl IndexNil                = []
-    expToC' _lvl IndexAny                = []
-    expToC' lvl  (IndexCons sh sz)       = expToC' lvl sh ++ expToC' lvl sz
-    expToC' lvl  (IndexHead ix)          = [last $ expToC' lvl ix]
-    expToC' lvl  (IndexTail ix)          = init $ expToC' lvl ix
-    expToC' lvl  (IndexSlice ix slix sh) = indexSlice ix (expToC' lvl slix) (expToC' lvl sh)
-    expToC' lvl  (IndexFull  ix slix sl) = indexFull  ix (expToC' lvl slix) (expToC' lvl sl)
-    expToC' lvl  (ToIndex sh ix)         = toIndexToC   (expToC' lvl sh) (expToC' lvl ix)
-    expToC' lvl  (FromIndex sh ix)       = fromIndexToC (expToC' lvl sh) (expToC' lvl ix)
+    expToC' _env _aenv IndexNil                = []
+    expToC' _env _aenv IndexAny                = []
+    expToC' env  aenv  (IndexCons sh sz)       = expToC' env aenv sh ++ expToC' env aenv sz
+    expToC' env  aenv  (IndexHead ix)          = [last $ expToC' env aenv ix]
+    expToC' env  aenv  (IndexTail ix)          = init $ expToC' env aenv ix
+    expToC' env  aenv  (IndexSlice ix slix sh) = indexSlice ix (expToC' env aenv slix) (expToC' env aenv sh)
+    expToC' env  aenv  (IndexFull  ix slix sl) = indexFull  ix (expToC' env aenv slix) (expToC' env aenv sl)
+    expToC' env  aenv  (ToIndex sh ix)         = toIndexToC (expToC' env aenv sh) (expToC' env aenv ix)
+    expToC' env  aenv  (FromIndex sh ix)       = fromIndexToC (expToC' env aenv sh) (expToC' env aenv ix)
     -- 
     -- -- Arrays and indexing
     -- Index acc ix            -> index acc ix env
@@ -87,7 +81,7 @@ expToC = expToC' 0
     -- Intersect sh1 sh2       -> intersect sh1 sh2 env
     -- 
     -- --Foreign function
-    expToC' _lvl (Foreign _ff _ _e) = error "D.A.A.C.Exp: 'Foreign' not supported"
+    expToC' _env _aenv (Foreign _ff _ _e) = error "D.A.A.C.Exp: 'Foreign' not supported"
 
     -- Scalar let expressions evaluate their terms and generate new (const) variable bindings to store these results.
     -- Variable names are unambiguously based on the de Bruijn indices and the index of the tuple component they
@@ -96,57 +90,56 @@ expToC = expToC' 0
     -- FIXME: Currently we need to push lets into each binding, as we don't have a statement sequence as the prelude
     --   to the list of expressions that this function returns.
     --
-    elet :: (Elt t, Elt t') => Level -> OpenExp env aenv t -> OpenExp (env, t) aenv t' -> [C.Exp]
-    elet lvl bnd body
-      = map (\bodyiC -> [cexp| ({ $items:inits $exp:bodyiC; }) |]) (expToC' (lvl + 1) body)
+    elet :: (Elt t, Elt t') => Val env -> Val aenv -> OpenExp env aenv t -> OpenExp (env, t) aenv t' -> [C.Exp]
+    elet env aenv bnd body
+      = map (\bodyiC -> [cexp| ({ $items:inits $exp:bodyiC; }) |]) (expToC' env_t aenv body)
       where
-        name  = "x" ++ show lvl
-        inits = zipWith3 bindOneComponent [0::Int ..] (expType bnd) (expToC' lvl bnd)
+        (names, env_t) = env `push` Sugar.expType bnd
+        inits = zipWith3 bindOneComponent names (expType bnd) (expToC' env aenv bnd)
         
-        bindOneComponent i tyiC bndiC = [citem| $ty:tyiC $id:(name ++ "_" ++ show i) = $exp:bndiC; |]
+        bindOneComponent name tyiC bndiC = [citem| $ty:tyiC $id:name = $exp:bndiC; |]
 
-    -- Convert an open expression into a sequence of C expressions. We retain
-    -- snoc-list ordering, so the element at tuple index zero is at the end of
-    -- the list. Note that nested tuple structures are flattened.
+    -- Convert an open expression into a sequence of C expressions. We retain snoc-list ordering, so the element at
+    -- tuple index zero is at the end of the list. Note that nested tuple structures are flattened.
     --
-    tupToC :: Level -> Tuple (OpenExp env aenv) t -> [C.Exp]
-    tupToC _lvl NilTup        = []
-    tupToC lvl  (SnocTup t e) = tupToC lvl t ++ expToC' lvl e
+    tupToC :: Val aenv -> Val env -> Tuple (OpenExp aenv env) t -> [C.Exp]
+    tupToC _env _eanv NilTup        = []
+    tupToC env  aenv  (SnocTup t e) = tupToC env aenv t ++ expToC' env aenv e
 
-    -- Project out a tuple index. Since the nested tuple structure is flattened,
-    -- this actually corresponds to slicing out a subset of the list of C
-    -- expressions, rather than picking out a single element.
+    -- Project out a tuple index. Since the nested tuple structure is flattened, this actually corresponds to slicing
+    -- out a subset of the list of C expressions, rather than picking out a single element.
     --
     prjToC :: Elt t 
-           => Level
+           => Val env 
+           -> Val aenv
            -> TupleIdx (TupleRepr t) e
            -> OpenExp env aenv t
            -> OpenExp env aenv e
            -> [C.Exp]
-    prjToC lvl ix t e =
+    prjToC env aenv ix t e =
       let subset = reverse
                  . take (length      $ expType e)
                  . drop (prjToInt ix $ Sugar.preExpType Sugar.accType t)
                  . reverse
       in
-      subset $ expToC' lvl t
+      subset $ expToC' env aenv t
 
-    -- Scalar conditionals. To keep the return type as an expression list we use
-    -- the ternery C condition operator (?:). 
+    -- Scalar conditionals. To keep the return type as an expression list we use the ternery C condition operator (?:). 
     --
-    -- FIXME: For tuples this is not particularly good, so the least we can do is make sure the predicate
-    -- result is evaluated only once and bind it to a local variable.
+    -- FIXME: For tuples this is not particularly good, so the least we can do is make sure the predicate result is
+    -- evaluated only once and bind it to a local variable.
     --
     condToC :: Elt t 
-            => Level
-            -> OpenExp env anev Bool
+            => Val env 
+            -> Val aenv
+            -> OpenExp env aenv Bool
             -> OpenExp env aenv t
             -> OpenExp env aenv t
             -> [C.Exp]
-    condToC lvl p t e
-      = zipWith (\tiC eiC -> [cexp| $exp:pC ? $exp:tiC : $exp:eiC |]) (expToC' lvl t) (expToC' lvl e)
+    condToC env aenv p t e
+      = zipWith (\tiC eiC -> [cexp| $exp:pC ? $exp:tiC : $exp:eiC |]) (expToC' env aenv t) (expToC' env aenv e)
       where
-        [pC] = expToC' lvl p    -- type guarantees singleton
+        [pC] = expToC' env aenv p    -- type guarantees singleton
         
 
 -- Tuples
@@ -161,10 +154,6 @@ prjToInt ZeroTupIdx     _                 = 0
 prjToInt (SuccTupIdx i) (b `PairTuple` a) = prjToInt i b + sizeTupleType a
 prjToInt _              t                 = error $ "D.A.A.C.Exp.prjToInt: inconsistent tuple index: " ++ show t
 
-sizeTupleType :: TupleType a -> Int
-sizeTupleType UnitTuple       = 0
-sizeTupleType (SingleTuple _) = 1
-sizeTupleType (PairTuple a b) = sizeTupleType a + sizeTupleType b
 
 -- Shapes and indices
 -- ------------------

@@ -17,7 +17,8 @@
 
 module Data.Array.Accelerate.C.Type (
   expType,
-  tupleTypeToC, scalarTypeToC, numTypeToC, integralTypeToC, floatingTypeToC, nonNumTypeToC
+  tupleTypeToC, scalarTypeToC, numTypeToC, integralTypeToC, floatingTypeToC, nonNumTypeToC,
+  sizeTupleType
 ) where
 
   -- libraries
@@ -85,6 +86,17 @@ nonNumTypeToC (TypeChar   _) = typename "HsChar"
 nonNumTypeToC (TypeCChar  _) = [cty|char|]
 nonNumTypeToC (TypeCSChar _) = [cty|signed char|]
 nonNumTypeToC (TypeCUChar _) = [cty|unsigned char|]
+
+
+-- Tuples
+-- ------
+
+-- |Number of (flattened) components of a tuple type.
+--
+sizeTupleType :: TupleType a -> Int
+sizeTupleType UnitTuple       = 0
+sizeTupleType (SingleTuple _) = 1
+sizeTupleType (PairTuple a b) = sizeTupleType a + sizeTupleType b
 
 
 -- Auxilliary functions
