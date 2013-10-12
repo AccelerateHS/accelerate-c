@@ -44,9 +44,10 @@ import Data.Array.Accelerate.Trafo.Sharing              (convertExp)
 import Data.Array.Accelerate.Type
 
   -- friends
-import Data.Array.Accelerate.C.Type
-import Data.Array.Accelerate.C.Load
+import Data.Array.Accelerate.C.Base
 import Data.Array.Accelerate.C.Exp
+import Data.Array.Accelerate.C.Load
+import Data.Array.Accelerate.C.Type
 
 
 -- Execute a scalar Accelerate computation
@@ -62,6 +63,7 @@ runExpIO e
           ctys  = tupleTypeToC (Sugar.expType e')
           resty = head ctys   -- we check for 'length ces == 1' further down
           cUnit = [cunit|
+                    $edecls:cshapeDefs
                     $ty:resty * $id:cFunName ()
                     {
                       $ty:resty *result = malloc(sizeof($ty:resty));

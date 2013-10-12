@@ -30,6 +30,7 @@ import qualified
 import Language.C.Quote.C as C
 
   -- accelerate
+import Data.Array.Accelerate.Analysis.Shape       (expDim)
 import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.Array.Representation (SliceIndex(..))
 import Data.Array.Accelerate.AST                  hiding (Val(..), prj)
@@ -40,7 +41,7 @@ import Data.Array.Accelerate.Type
   -- friends
 import Data.Array.Accelerate.C.Base
 import Data.Array.Accelerate.C.Type
-import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
+import qualified Data.Array.Accelerate.Analysis.Type as Sugar
 
 
 -- Generating C code from scalar Accelerate expressions
@@ -72,15 +73,17 @@ expToC = expToC' Empty Empty
     expToC' env  aenv  (IndexFull  ix slix sl) = indexFull  ix (expToC' env aenv slix) (expToC' env aenv sl)
     expToC' env  aenv  (ToIndex sh ix)         = toIndexToC (expToC' env aenv sh) (expToC' env aenv ix)
     expToC' env  aenv  (FromIndex sh ix)       = fromIndexToC (expToC' env aenv sh) (expToC' env aenv ix)
-    -- 
+    
     -- -- Arrays and indexing
-    -- Index acc ix            -> index acc ix env
-    -- LinearIndex acc ix      -> linearIndex acc ix env
-    -- Shape acc               -> shape acc env
-    -- ShapeSize sh            -> shapeSize sh env
-    -- Intersect sh1 sh2       -> intersect sh1 sh2 env
-    -- 
-    -- --Foreign function
+    expToC' env  aenv (Index acc ix)       = indexToC aenv acc (expToC' env aenv ix)
+    expToC' env  aenv (LinearIndex acc ix) = linearIndexToC aenv acc (expToC' env aenv ix)
+    expToC' env  aenv (Shape acc)          = shapeToC aenv acc
+    expToC' env  aenv (ShapeSize sh)       = shapeSizeToC (expToC' env aenv sh)
+    expToC' env  aenv (Intersect sh1 sh2)  = intersectToC (eltType (undefined::t)) 
+                                                          (expToC' env aenv sh1)
+                                                          (expToC' env aenv sh2)
+    
+    --Foreign function
     expToC' _env _aenv (Foreign _ff _ _e) = error "D.A.A.C.Exp: 'Foreign' not supported"
 
     -- Scalar let expressions evaluate their terms and generate new (const) variable bindings to store these results.
@@ -145,9 +148,8 @@ expToC = expToC' Empty Empty
 -- Tuples
 -- ------
 
--- Convert a tuple index into the corresponding integer. Since the internal
--- representation is flat, be sure to walk over all sub components when indexing
--- past nested tuples.
+-- Convert a tuple index into the corresponding integer. Since the internal representation is flat, be sure to walk
+-- over all sub components when indexing past nested tuples.
 --
 prjToInt :: TupleIdx t e -> TupleType a -> Int
 prjToInt ZeroTupIdx     _                 = 0
@@ -200,6 +202,49 @@ fromIndexToC sh ix
     fromIndex' []     _ = []
     fromIndex' [_]    i = [i]
     fromIndex' (d:ds) i = [cexp| $exp:i % $exp:d |] : fromIndex' ds [cexp| $exp:i / $exp:d |]
+
+-- Project out a single scalar element from an array. The array expression does not contain any free scalar variables
+-- (strictly flat data parallelism) and has been floated out to be replaced by an array variable.
+--
+-- FIXME: As we have a non-parametric array representation, we should bind the computed linear array index to a variable
+--        and share it in the indexing of the various array components.
+--
+indexToC :: (Shape sh, Elt e) => Val aenv -> OpenAcc aenv (Array sh e) -> [C.Exp] -> [C.Exp]
+indexToC aenv (OpenAcc (Avar idx)) ix
+  = let (shName:arrNames) = prj idx aenv
+    in
+    [ [cexp| $id:arr [ $exp:(toIndexWithShape shName ix) ] |] | arr <- arrNames ]
+indexToC _aenv _arr _ix = error "D.A.A.C.Exp.indexToC: array variable expected"
+
+-- Generate linear array indexing code.
+--
+-- The array argument here can only be a variable, as arrays are lifted out of expressions in an earlier phase.
+--
+linearIndexToC :: (Shape sh, Elt e) => Val aenv -> OpenAcc aenv (Array sh e) -> [C.Exp] -> [C.Exp]
+linearIndexToC aenv (OpenAcc (Avar idx)) ix
+  = [ [cexp| $id:arr [ $exp:(head ix) ] |] | arr <- tail $ prj idx aenv]
+                                                      -- 'head (prj idx aenv)' is the shape variable
+linearIndexToC _aenv _arr _ix = error "D.A.A.C.Exp.linearIndexToC: array variable expected"
+    
+-- Generate code to compute the shape of an array.
+--
+-- The array argument here can only be a variable, as arrays are lifted out of expressions in an earlier phase.
+--
+-- The first element (always present) in an array valuation is the array's shape variable.
+--
+shapeToC :: forall sh e aenv. (Shape sh, Elt e) => Val aenv -> OpenAcc aenv (Array sh e) -> [C.Exp]
+shapeToC aenv  (OpenAcc (Avar idx)) = cshape (sizeTupleType . eltType $ (undefined::sh)) (cvar $ head (prj idx aenv))
+shapeToC _aenv _arr                 = error "D.A.A.C.Exp.shapeToC: array variable expected"
+
+-- The size of a shape, as the product of the extent in each dimension.
+--
+shapeSizeToC :: [C.Exp] -> [C.Exp]
+shapeSizeToC = (:[]) . foldl (\a b -> [cexp| $exp:a * $exp:b |]) [cexp| 1 |] 
+    
+-- Intersection of two shapes, taken as the minimum in each dimension.
+--
+intersectToC :: TupleType t -> [C.Exp] -> [C.Exp] -> [C.Exp]
+intersectToC ty sh1 sh2 = zipWith (\a b -> ccall "min" [a, b]) (ccastTup ty sh1) (ccastTup ty sh2)
 
 
 -- Primtive functions
@@ -427,6 +472,19 @@ ceilingToC ta tb x
 
 ccast :: ScalarType a -> C.Exp -> C.Exp
 ccast ty x = [cexp|($ty:(scalarTypeToC ty)) $exp:x|]
+
+ccastTup :: TupleType e -> [C.Exp] -> [C.Exp]
+ccastTup ty = fst . travTup ty
+  where
+    travTup :: TupleType e -> [C.Exp] -> ([C.Exp],[C.Exp])
+    travTup UnitTuple         xs     = ([], xs)
+    travTup (SingleTuple ty') (x:xs) = ([ccast ty' x], xs)
+    travTup (PairTuple l r)   xs     = let
+                                         (ls, xs' ) = travTup l xs
+                                         (rs, xs'') = travTup r xs'
+                                       in 
+                                       (ls ++ rs, xs'')
+    travTup _ _                      = error "D.A.A.C.Exp.ccastTup: not enough expressions to match type"
 
 postfix :: NumType a -> String -> String
 postfix (FloatingNumType (TypeFloat  _)) x = x ++ "f"

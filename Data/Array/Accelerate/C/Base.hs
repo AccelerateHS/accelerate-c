@@ -20,7 +20,7 @@ module Data.Array.Accelerate.C.Base (
   Val(..), prj, valSize, push,
   cvar, ccall, cchar, cintegral, cbool,
   rotateL, rotateR, idiv, uidiv, imod, uimod,
-  cdim, cshape, {- shapeSize, indexHead -}
+  cshapeDefs, cdim, cshape, toIndexWithShape
 ) where
 
   -- libraries
@@ -157,22 +157,39 @@ uimod _ty x y = [cexp| $exp:x % $exp:y |]
 -- Shape and indices support
 -- -------------------------
 
+cshapeDefs :: [C.Definition]
+cshapeDefs
+  = [cunit|
+      typedef typename HsWord64                         Ix;
+      typedef void*                                     DIM0;
+      typedef Ix                                        DIM1;
+      typedef struct { Ix a1,a0; }                      DIM2;
+      typedef struct { Ix a2,a1,a0; }                   DIM3;
+      typedef struct { Ix a3,a2,a1,a0; }                DIM4;
+      typedef struct { Ix a4,a3,a2,a1,a0; }             DIM5;
+      typedef struct { Ix a5,a4,a3,a2,a1,a0; }          DIM6;
+      typedef struct { Ix a6,a5,a4,a3,a2,a1,a0; }       DIM7;
+      typedef struct { Ix a7,a6,a5,a4,a3,a2,a1,a0; }    DIM8;
+      typedef struct { Ix a8,a7,a6,a5,a4,a3,a2,a1,a0; } DIM9;  
+    |]
+
 cdim :: Name -> Int -> C.Definition
 cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
 
--- Disassemble a struct-shape into a list of expressions accessing the fields
+-- Disassemble a struct-shape into a list of expressions accessing the fields.
+--
 cshape :: Int -> C.Exp -> [C.Exp]
 cshape dim sh
   | dim == 0  = []
   | dim == 1  = [sh]
   | otherwise = map (\i -> [cexp|$exp:sh . $id:('a':show i)|]) [dim-1, dim-2 .. 0]
 
-{-
--- Calculate the size of a shape from its component dimensions
-shapeSize :: Rvalue r => [r] -> C.Exp
-shapeSize [] = [cexp| 1 |]
-shapeSize ss = foldl1 (\a b -> [cexp| $exp:a * $exp:b |]) (map rvalue ss)
-
-indexHead :: Rvalue r => [r] -> C.Exp
-indexHead = rvalue . last
--}
+-- Generate code to calculate a linear from a multi-dimensional index (given an array shape).
+--
+toIndexWithShape :: Name -> [C.Exp] -> C.Exp
+toIndexWithShape shName is
+  = toIndex [0..] (reverse is)    -- we use a row-major representation
+  where
+    toIndex _dims  []     = [cexp| 0 |]
+    toIndex _dims  [i]    = i
+    toIndex (d:ds) (i:is) = [cexp| $exp:(toIndex ds is) * $id:shName.$id:('a':show d) + $exp:i |]
