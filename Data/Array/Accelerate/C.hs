@@ -17,7 +17,7 @@
 --
 
 module Data.Array.Accelerate.C (
-  runExpIO
+  runExpIO, runIO
 ) where
 
   -- standard libraries

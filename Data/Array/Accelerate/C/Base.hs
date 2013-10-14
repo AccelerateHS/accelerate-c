@@ -29,7 +29,6 @@ import qualified
 import Language.C.Quote.C as C
 
   -- accelerate
-import Data.Array.Accelerate.Analysis.Type
 import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Type
@@ -112,7 +111,7 @@ pushExpEnv env _e
 --
 -- The second argument will not be demanded. We are only interested in its type.
 --
-pushAccEnv :: forall arrs env aenv e. Arrays arrs 
+pushAccEnv :: forall arrs aenv e. Arrays arrs 
            => Env aenv -> OpenAcc aenv arrs -> ([(C.Type, Name)], Env (aenv, e))
 pushAccEnv env _acc
   = (names, env `PushEnv` names)
@@ -241,8 +240,9 @@ csize n sh = foldl cmul [cexp| 1 |] [[cexp| $exp:sh . $id:('a':show i) |] | i <-
 --
 toIndexWithShape :: Name -> [C.Exp] -> C.Exp
 toIndexWithShape shName is
-  = toIndex [0..] (reverse is)    -- we use a row-major representation
+  = toIndex [(0::Int)..] (reverse is)    -- we use a row-major representation
   where
     toIndex _dims  []     = [cexp| NULL |]
     toIndex _dims  [i]    = i
     toIndex (d:ds) (i:is) = [cexp| $exp:(toIndex ds is) * $id:shName.$id:('a':show d) + $exp:i |]
+    toIndex _      _      = error "D.A.A.C.Base.toIndexWithShape: oops"

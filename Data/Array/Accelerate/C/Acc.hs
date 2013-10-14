@@ -22,7 +22,6 @@ module Data.Array.Accelerate.C.Acc (
 
   -- libraries
 import Data.List
-import Data.Loc
 import qualified 
        Language.C         as C
 import Language.C.Quote.C as C

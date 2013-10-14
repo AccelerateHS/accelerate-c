@@ -30,7 +30,6 @@ import qualified
 import Language.C.Quote.C as C
 
   -- accelerate
-import Data.Array.Accelerate.Analysis.Shape       (expDim)
 import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.Array.Representation (SliceIndex(..))
 import Data.Array.Accelerate.AST                  hiding (Val(..), prj)
@@ -64,6 +63,7 @@ fun1ToC aenv (Lam (Body f))
   = (bnds, openExpToC env aenv f)
   where
     (bnds, env) = EmptyEnv `pushExpEnv` (undefined::OpenExp () aenv t)
+fun1ToC _aenv _ = error "D.A.A.C.Exp.fun1ToC: unreachable"
 
 -- Compile an open embedded scalar expression into a list of C expression whose length corresponds to the number of tuple
 -- components of the embedded type.
@@ -98,7 +98,7 @@ openExpToC = expToC'
     -- -- Arrays and indexing
     expToC' env  aenv (Index acc ix)       = indexToC aenv acc (expToC' env aenv ix)
     expToC' env  aenv (LinearIndex acc ix) = linearIndexToC aenv acc (expToC' env aenv ix)
-    expToC' env  aenv (Shape acc)          = shapeToC aenv acc
+    expToC' _env aenv (Shape acc)          = shapeToC aenv acc
     expToC' env  aenv (ShapeSize sh)       = shapeSizeToC (expToC' env aenv sh)
     expToC' env  aenv (Intersect sh1 sh2)  = intersectToC (eltType (undefined::t)) 
                                                           (expToC' env aenv sh1)

@@ -2,6 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
 
 -- |
 -- Module      : Data.Array.Accelerate.C.Execute
@@ -23,12 +24,6 @@ module Data.Array.Accelerate.C.Execute (
   -- standard libraries
 import Foreign
 
-  -- libraries
-import Data.Loc
-import qualified 
-       Language.C         as C
-import Language.C.Quote.C as C
-
   -- accelerate
 import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.AST
@@ -36,7 +31,6 @@ import Data.Array.Accelerate.AST
   -- friends
 import Data.Array.Accelerate.C.Base
 import Data.Array.Accelerate.C.Load as Load
-import Data.Array.Accelerate.C.Type
 
 
 -- Execute an array computation
