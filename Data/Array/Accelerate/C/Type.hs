@@ -1,5 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs         #-}
-{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE QuasiQuotes   #-}
 
 -- |
@@ -16,7 +16,7 @@
 --
 
 module Data.Array.Accelerate.C.Type (
-  expType,
+  arrTypeToC, accTypeToC,
   tupleTypeToC, scalarTypeToC, numTypeToC, integralTypeToC, floatingTypeToC, nonNumTypeToC,
   sizeTupleType
 ) where
@@ -26,16 +26,29 @@ import Language.C         as C
 import Language.C.Quote.C as C
   
     -- accelerate
+import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Type
-import qualified Data.Array.Accelerate.Analysis.Type    as Sugar
 
 
--- Determine types
--- ---------------
+-- Convert an Accelerate array type to C
+-- -------------------------------------
 
-expType :: OpenExp env aenv t -> [C.Type]
-expType = tupleTypeToC . Sugar.expType
+-- Determine the set of C types used to represent values of the given array type.
+--
+-- The (dummy) value will not be used. The implementation only depends on its type.
+--
+arrTypeToC :: forall sh e. (Shape sh, Elt e) => Array sh e -> [C.Type]
+arrTypeToC _dummy
+  = [cty| typename $id:("DIM" ++ show (dim (undefined::sh))) * |] :
+    [ [cty| $ty:t * |] | t <- tupleTypeToC (eltType (undefined::e))]
+
+-- Determine the set of C types used to represent values of the array type produced by the given array computation.
+--
+-- The (dummy) value will not be used. The implementation only depends on its type.
+--
+accTypeToC :: forall sh e aenv. (Shape sh, Elt e) => OpenAcc aenv (Array sh e) -> [C.Type]
+accTypeToC _dummy = arrTypeToC (undefined::Array sh e)
 
 
 -- Convert Accelerate to C types

@@ -12,7 +12,7 @@
 --
 
 module Data.Array.Accelerate.C.Load (
-  load, unload
+  load, lookup, loadAndLookup, unload
 ) where
 
   -- GHC API
@@ -22,19 +22,34 @@ import ObjLink
   -- standard libraries
 import Control.Applicative
 import Foreign
+import Prelude              hiding (lookup)
 
 
--- |Load the given object file and resolve the given symbol.
+-- |Load the given object file.
 --
-load :: FilePath -> String -> IO (Maybe (FunPtr a))
-load fname symbol
+load :: FilePath -> IO Bool
+load fname 
   = do
     { initObjLinker
     ; loadObj fname
-    ; successStatus <- resolveObjs
-    ; case successStatus of
-        Succeeded -> fmap castPtrToFunPtr <$> lookupSymbol symbol
-        Failed    -> return Nothing
+    ; succeeded <$> resolveObjs
+    }
+
+-- Resolve the given symbol.
+--
+lookup :: String -> IO (Maybe (FunPtr a))
+lookup symbol = fmap castPtrToFunPtr <$> lookupSymbol symbol
+
+-- |Load the given object file and resolve the given symbol.
+--
+loadAndLookup :: FilePath -> String -> IO (Maybe (FunPtr a))
+loadAndLookup fname symbol
+  = do
+    { ok <- load fname
+    ; if ok then
+        lookup symbol
+      else
+        return Nothing
     }
 
 -- |Unload the given object file.

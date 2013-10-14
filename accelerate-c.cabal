@@ -36,7 +36,9 @@ Library
 
   Exposed-modules:      Data.Array.Accelerate.C
 
-  Other-modules:        Data.Array.Accelerate.C.Base
+  Other-modules:        Data.Array.Accelerate.C.Acc
+                        Data.Array.Accelerate.C.Base
+                        Data.Array.Accelerate.C.Execute
                         Data.Array.Accelerate.C.Exp
                         Data.Array.Accelerate.C.Load
                         Data.Array.Accelerate.C.Type

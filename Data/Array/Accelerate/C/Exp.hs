@@ -17,7 +17,7 @@
 --
 
 module Data.Array.Accelerate.C.Exp (
-  expToC
+  expToC, openExpToC, fun1ToC
 ) where
 
   -- standard libraries
@@ -41,20 +41,41 @@ import Data.Array.Accelerate.Type
   -- friends
 import Data.Array.Accelerate.C.Base
 import Data.Array.Accelerate.C.Type
-import qualified Data.Array.Accelerate.Analysis.Type as Sugar
+import Data.Array.Accelerate.Analysis.Type
 
 
 -- Generating C code from scalar Accelerate expressions
 -- ----------------------------------------------------
 
--- Produces a list of expression whose length corresponds to the number of tuple components of the result type.
+-- Compile a closed embedded scalar expression into a list of C expression whose length corresponds to the number of tuple
+-- components of the embedded type.
 --
 expToC :: Elt t => Exp () t -> [C.Exp]
-expToC = expToC' Empty Empty
+expToC = openExpToC EmptyEnv EmptyEnv
+
+-- Compile an open embedded scalar unary function into a list of C expression whose length corresponds to the number of
+-- tuple components of the embedded result type. In addition ot the generated C, the types and names of the variables
+-- that need to contain the function argument are returned.
+--
+-- The expression may contain free array variables according to the array variable valuation passed as a first argument.
+--
+fun1ToC :: forall t t' aenv. (Elt t, Elt t') => Env aenv -> OpenFun () aenv (t -> t') -> ([(C.Type, Name)], [C.Exp])
+fun1ToC aenv (Lam (Body f))
+  = (bnds, openExpToC env aenv f)
   where
-    expToC' :: forall t env aenv. Elt t => Val env -> Val aenv -> OpenExp env aenv t -> [C.Exp]
+    (bnds, env) = EmptyEnv `pushExpEnv` (undefined::OpenExp () aenv t)
+
+-- Compile an open embedded scalar expression into a list of C expression whose length corresponds to the number of tuple
+-- components of the embedded type.
+--
+-- The expression may contain free array variables according to the array variable valuation passed as a first argument.
+--
+openExpToC :: Elt t => Env env -> Env aenv -> OpenExp env aenv t -> [C.Exp]
+openExpToC = expToC'
+  where
+    expToC' :: forall t env aenv. Elt t => Env env -> Env aenv -> OpenExp env aenv t -> [C.Exp]
     expToC' env  aenv  (Let bnd body)     = elet env aenv bnd body
-    expToC' env  _aenv (Var idx)          = [ [cexp| $id:name |] | name <- prj idx env]
+    expToC' env  _aenv (Var idx)          = [ [cexp| $id:name |] | (_, name) <- prjEnv idx env]
     expToC' _env _aenv (PrimConst c)      = [primConstToC c]
     expToC' _env _aenv (Const c)          = constToC (eltType (undefined::t)) c
     expToC' env  aenv  (PrimApp f arg)    = [primToC f $ expToC' env aenv arg]
@@ -93,19 +114,19 @@ expToC = expToC' Empty Empty
     -- FIXME: Currently we need to push lets into each binding, as we don't have a statement sequence as the prelude
     --   to the list of expressions that this function returns.
     --
-    elet :: (Elt t, Elt t') => Val env -> Val aenv -> OpenExp env aenv t -> OpenExp (env, t) aenv t' -> [C.Exp]
+    elet :: (Elt t, Elt t') => Env env -> Env aenv -> OpenExp env aenv t -> OpenExp (env, t) aenv t' -> [C.Exp]
     elet env aenv bnd body
       = map (\bodyiC -> [cexp| ({ $items:inits $exp:bodyiC; }) |]) (expToC' env_t aenv body)
       where
-        (names, env_t) = env `push` Sugar.expType bnd
-        inits = zipWith3 bindOneComponent names (expType bnd) (expToC' env aenv bnd)
+        (binders, env_t) = env `pushExpEnv` bnd
+        inits            = zipWith bindOneComponent binders (expToC' env aenv bnd)
         
-        bindOneComponent name tyiC bndiC = [citem| $ty:tyiC $id:name = $exp:bndiC; |]
+        bindOneComponent (tyiC, name) bndiC = [citem| $ty:tyiC $id:name = $exp:bndiC; |]
 
     -- Convert an open expression into a sequence of C expressions. We retain snoc-list ordering, so the element at
     -- tuple index zero is at the end of the list. Note that nested tuple structures are flattened.
     --
-    tupToC :: Val aenv -> Val env -> Tuple (OpenExp aenv env) t -> [C.Exp]
+    tupToC :: Env aenv -> Env env -> Tuple (OpenExp aenv env) t -> [C.Exp]
     tupToC _env _eanv NilTup        = []
     tupToC env  aenv  (SnocTup t e) = tupToC env aenv t ++ expToC' env aenv e
 
@@ -113,16 +134,16 @@ expToC = expToC' Empty Empty
     -- out a subset of the list of C expressions, rather than picking out a single element.
     --
     prjToC :: Elt t 
-           => Val env 
-           -> Val aenv
+           => Env env 
+           -> Env aenv
            -> TupleIdx (TupleRepr t) e
            -> OpenExp env aenv t
            -> OpenExp env aenv e
            -> [C.Exp]
     prjToC env aenv ix t e =
       let subset = reverse
-                 . take (length      $ expType e)
-                 . drop (prjToInt ix $ Sugar.preExpType Sugar.accType t)
+                 . take (length      $ tupleTypeToC (expType e))
+                 . drop (prjToInt ix $ preExpType accType t)
                  . reverse
       in
       subset $ expToC' env aenv t
@@ -133,8 +154,8 @@ expToC = expToC' Empty Empty
     -- evaluated only once and bind it to a local variable.
     --
     condToC :: Elt t 
-            => Val env 
-            -> Val aenv
+            => Env env 
+            -> Env aenv
             -> OpenExp env aenv Bool
             -> OpenExp env aenv t
             -> OpenExp env aenv t
@@ -209,21 +230,21 @@ fromIndexToC sh ix
 -- FIXME: As we have a non-parametric array representation, we should bind the computed linear array index to a variable
 --        and share it in the indexing of the various array components.
 --
-indexToC :: (Shape sh, Elt e) => Val aenv -> OpenAcc aenv (Array sh e) -> [C.Exp] -> [C.Exp]
+indexToC :: (Shape sh, Elt e) => Env aenv -> OpenAcc aenv (Array sh e) -> [C.Exp] -> [C.Exp]
 indexToC aenv (OpenAcc (Avar idx)) ix
-  = let (shName:arrNames) = prj idx aenv
+  = let ((_, shName):arrNames) = prjEnv idx aenv
     in
-    [ [cexp| $id:arr [ $exp:(toIndexWithShape shName ix) ] |] | arr <- arrNames ]
+    [ [cexp| $id:arr [ $exp:(toIndexWithShape shName ix) ] |] | (_, arr) <- arrNames ]
 indexToC _aenv _arr _ix = error "D.A.A.C.Exp.indexToC: array variable expected"
 
 -- Generate linear array indexing code.
 --
 -- The array argument here can only be a variable, as arrays are lifted out of expressions in an earlier phase.
 --
-linearIndexToC :: (Shape sh, Elt e) => Val aenv -> OpenAcc aenv (Array sh e) -> [C.Exp] -> [C.Exp]
+linearIndexToC :: (Shape sh, Elt e) => Env aenv -> OpenAcc aenv (Array sh e) -> [C.Exp] -> [C.Exp]
 linearIndexToC aenv (OpenAcc (Avar idx)) ix
-  = [ [cexp| $id:arr [ $exp:(head ix) ] |] | arr <- tail $ prj idx aenv]
-                                                      -- 'head (prj idx aenv)' is the shape variable
+  = [ [cexp| $id:arr [ $exp:(head ix) ] |] | (_, arr) <- tail $ prjEnv idx aenv]
+                                                      -- 'head (prjEnv idx aenv)' is the shape variable
 linearIndexToC _aenv _arr _ix = error "D.A.A.C.Exp.linearIndexToC: array variable expected"
     
 -- Generate code to compute the shape of an array.
@@ -232,8 +253,9 @@ linearIndexToC _aenv _arr _ix = error "D.A.A.C.Exp.linearIndexToC: array variabl
 --
 -- The first element (always present) in an array valuation is the array's shape variable.
 --
-shapeToC :: forall sh e aenv. (Shape sh, Elt e) => Val aenv -> OpenAcc aenv (Array sh e) -> [C.Exp]
-shapeToC aenv  (OpenAcc (Avar idx)) = cshape (sizeTupleType . eltType $ (undefined::sh)) (cvar $ head (prj idx aenv))
+shapeToC :: forall sh e aenv. (Shape sh, Elt e) => Env aenv -> OpenAcc aenv (Array sh e) -> [C.Exp]
+shapeToC aenv  (OpenAcc (Avar idx)) = cshape (sizeTupleType . eltType $ (undefined::sh)) 
+                                             [cexp| * $id:(snd . head $ prjEnv idx aenv) |]
 shapeToC _aenv _arr                 = error "D.A.A.C.Exp.shapeToC: array variable expected"
 
 -- The size of a shape, as the product of the extent in each dimension.

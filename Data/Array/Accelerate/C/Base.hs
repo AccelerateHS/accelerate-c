@@ -16,11 +16,11 @@
 --
 
 module Data.Array.Accelerate.C.Base (
-  Name,
-  Val(..), prj, valSize, push,
+  Name, expNames, accNames, cFunName,
+  Env(..), prjEnv, envSize, pushExpEnv, pushAccEnv,
   cvar, ccall, cchar, cintegral, cbool,
   rotateL, rotateR, idiv, uidiv, imod, uimod,
-  cshapeDefs, cdim, cshape, toIndexWithShape
+  cshapeDefs, cdim, cshape, csize, toIndexWithShape
 ) where
 
   -- libraries
@@ -29,9 +29,10 @@ import qualified
 import Language.C.Quote.C as C
 
   -- accelerate
+import Data.Array.Accelerate.Analysis.Type
+import Data.Array.Accelerate.Array.Sugar
+import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Array.Sugar (EltRepr)
-import Data.Array.Accelerate.AST         (Idx(..))
 
   -- friends
 import Data.Array.Accelerate.C.Type
@@ -42,40 +43,88 @@ import Data.Array.Accelerate.C.Type
 
 type Name = String
 
--- Valuations
--- ----------
-
--- Valuating variables with lists of C variable names.
+-- Given a base name and the number of tuple components, yield the component names for a scalar variable.
 --
--- The length of variable names list corresponds to the number of tuple components of the represented value.
---
-data Val env where
-  Empty ::                      Val ()
-  Push  :: Val env -> [Name] -> Val (env, s)
+expNames :: Name -> Int -> [Name]
+expNames name n = [name ++ "_" ++ show i | i <- [(0::Int)..n-1]]
 
-prj :: Idx env t -> Val env -> [Name]
-prj ZeroIdx      (Push _   v) = v
-prj (SuccIdx ix) (Push val _) = prj ix val
-prj _            _            = error "D.A.A.C.Base: inconsistent valuation"
+-- Given a base name and a list of numbers of tuple components, yield the component names for a tuple of array
+-- variables.
+--
+accNames :: Name -> [Int] -> [Name]
+accNames name ns = concat [(name ++ show n ++ "_sh") : [name ++ show n ++ "_" ++ show i | i <- [(0::Int)..n-1]] | n <- ns]
+
+-- Base name for C functions implementing Accelerate code.
+--
+cFunName :: Name
+cFunName = "acc"
+
+
+-- Environments
+-- ------------
+
+-- C environment of variables as lists of C variable names and their types.
+--
+-- The length of variable names list corresponds
+--
+-- * for scalar values, to the number of tuple components of the represented value and
+-- * for array values, to the number of tuple components of the represented values (one array per component) plus one
+--   extra name (the first one) for the shape.
+--
+data Env env where
+  EmptyEnv ::                                Env ()
+  PushEnv  :: Env env -> [(C.Type, Name)] -> Env (env, s)
+
+prjEnv :: Idx env t -> Env env -> [(C.Type, Name)]
+prjEnv ZeroIdx      (PushEnv _   v) = v
+prjEnv (SuccIdx ix) (PushEnv env _) = prjEnv ix env
+prjEnv _            _               = error "D.A.A.C.Base: inconsistent valuation"
 
 -- Determine the size of an environment.
 --
-valSize :: Val env -> Int
-valSize Empty        = 0
-valSize (Push env _) = 1 + valSize env
+envSize :: Env env -> Int
+envSize EmptyEnv        = 0
+envSize (PushEnv env _) = 1 + envSize env
 
--- Extend the given valuation by one more variable of type 't'.
+-- Extend the given scalar environment by one more variable of type 't'.
 --
--- In addition to the extended valuation, yield the list of newly introduced names. The length of the list corresponds
--- to the number of tuple components of 't'. The names are based on the current size of the environment and the tuple
--- component represented by a given name.
+-- In addition to the extended environment, yield the list of newly introduced names and their C types. The length of
+-- the list corresponds to the number of tuple components of 't'. The names are based on the current size of the
+-- environment and the tuple component represented by a given name.
 --
-push :: Val env -> TupleType (EltRepr t) -> ([Name], Val (env, t))
-push env ty
-  = (names, env `Push` names)
+-- The second argument will not be demanded. We are only interested in its type.
+--
+pushExpEnv :: forall env aenv t. Elt t => Env env -> OpenExp env aenv t -> ([(C.Type, Name)], Env (env, t))
+pushExpEnv env _e
+  = (names, env `PushEnv` names)
   where
-    name  = "x" ++ show (valSize env)
-    names = [name ++ "_" ++ show i | i <- [(0::Int)..sizeTupleType ty - 1]]
+    ctys  = tupleTypeToC . eltType $ (undefined::t)
+    name  = "x" ++ show (envSize env)
+    names = zip ctys (expNames name (length ctys))
+
+-- Extend the given array environment by a tuple of array-valued variables
+--
+-- In addition to the extended environment, yield the list of newly introduced names and their C types. The length of
+-- the list corresponds to the sum of the number of tuple components per array in the tuple plus one extra name per
+-- array. The names are based on the current size of the environment and the tuple component represented by a given
+-- name. The extra name per array is that of the array shape. It preceeds the name of the first array component in the
+-- list.
+--
+-- The second argument will not be demanded. We are only interested in its type.
+--
+pushAccEnv :: forall arrs env aenv e. Arrays arrs 
+           => Env aenv -> OpenAcc aenv arrs -> ([(C.Type, Name)], Env (aenv, e))
+pushAccEnv env _acc
+  = (names, env `PushEnv` names)
+  where
+    ctys  = arrayTys (arrays (undefined::arrs))
+    name  = "a" ++ show (envSize env)
+    names = zip (concat ctys) (accNames name (map ((subtract 1) . length) ctys))  -- subtract 1 to account for shape ty
+    
+    arrayTys :: forall arrs. ArraysR arrs -> [[C.Type]]
+    arrayTys ArraysRunit                     = []
+    arrayTys (ArraysRarray :: ArraysR arrs') = [arrTypeToC (undefined::arrs')]
+    arrayTys (ArraysRpair l r)               = arrayTys l ++ arrayTys r
 
 
 -- Common expression forms
@@ -162,7 +211,7 @@ cshapeDefs
   = [cunit|
       typedef typename HsWord64                         Ix;
       typedef void*                                     DIM0;
-      typedef Ix                                        DIM1;
+      typedef struct { Ix a0; }                         DIM1;
       typedef struct { Ix a1,a0; }                      DIM2;
       typedef struct { Ix a2,a1,a0; }                   DIM3;
       typedef struct { Ix a3,a2,a1,a0; }                DIM4;
@@ -179,10 +228,14 @@ cdim name n = [cedecl|typedef typename $id:("DIM" ++ show n) $id:name;|]
 -- Disassemble a struct-shape into a list of expressions accessing the fields.
 --
 cshape :: Int -> C.Exp -> [C.Exp]
-cshape dim sh
-  | dim == 0  = []
-  | dim == 1  = [sh]
-  | otherwise = map (\i -> [cexp|$exp:sh . $id:('a':show i)|]) [dim-1, dim-2 .. 0]
+cshape dim sh = map (\i -> [cexp| $exp:sh . $id:('a':show i) |]) [dim-1, dim-2 .. 0]
+
+-- Generate code calculating the size of an array from its shape, given then shape struct and its dimension.
+--
+csize :: Int -> C.Exp -> C.Exp
+csize n sh = foldl cmul [cexp| 1 |] [[cexp| $exp:sh . $id:('a':show i) |] | i <- [0..n - 1]]
+  where
+    cmul e1 e2 = [cexp| $exp:e1 * $exp:e2 |]
 
 -- Generate code to calculate a linear from a multi-dimensional index (given an array shape).
 --
@@ -190,6 +243,6 @@ toIndexWithShape :: Name -> [C.Exp] -> C.Exp
 toIndexWithShape shName is
   = toIndex [0..] (reverse is)    -- we use a row-major representation
   where
-    toIndex _dims  []     = [cexp| 0 |]
+    toIndex _dims  []     = [cexp| NULL |]
     toIndex _dims  [i]    = i
     toIndex (d:ds) (i:is) = [cexp| $exp:(toIndex ds is) * $id:shName.$id:('a':show d) + $exp:i |]
