@@ -75,6 +75,18 @@ accExec aenv acc@(OpenAcc (Map f a))
     ; return resultArr
     }
 
+accExec aenv acc@(OpenAcc (ZipWith f a1 a2))
+  = do
+    { arg1Arr   <- accExec aenv a1
+    ; arg2Arr   <- accExec aenv a2
+    ; resultArr <- allocateArrayIO (shape arg1Arr
+                                    `intersect`
+                                    shape arg2Arr)  -- the result shape of a zipWith is the intersection of the argument shapes
+    ; let aenvWithArg = aenv `PushArrs` arg1Arr `PushArrs` arg2Arr
+    ; invokeAccWithArrs cFunName resultArr aenvWithArg
+    ; return resultArr
+    }
+
 accExec _ _ = error "D.A.A.C.Execute: unimplemented"
 
 

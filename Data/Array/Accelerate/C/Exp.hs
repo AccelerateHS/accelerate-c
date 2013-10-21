@@ -17,7 +17,7 @@
 --
 
 module Data.Array.Accelerate.C.Exp (
-  expToC, openExpToC, fun1ToC
+  expToC, openExpToC, fun1ToC, fun2ToC
 ) where
 
   -- standard libraries
@@ -64,6 +64,21 @@ fun1ToC aenv (Lam (Body f))
   where
     (bnds, env) = EmptyEnv `pushExpEnv` (undefined::OpenExp () aenv t)
 fun1ToC _aenv _ = error "D.A.A.C.Exp.fun1ToC: unreachable"
+
+-- Compile an open embedded scalar binary function into a list of C expression whose length corresponds to the number of
+-- tuple components of the embedded result type. In addition ot the generated C, the types and names of the variables
+-- that need to contain the function argument are returned.
+--
+-- The expression may contain free array variables according to the array variable valuation passed as a first argument.
+--
+fun2ToC :: forall t1 t2 t3 aenv. (Elt t1, Elt t2, Elt t3) 
+        => Env aenv -> OpenFun () aenv (t1 -> t2 -> t3) -> ([(C.Type, Name)], [(C.Type, Name)], [C.Exp])
+fun2ToC aenv (Lam (Lam (Body f)))
+  = (bnds1, bnds2, openExpToC env2 aenv f)
+  where
+    (bnds1, env1) = EmptyEnv `pushExpEnv` (undefined::OpenExp ()       aenv t1)
+    (bnds2, env2) = env1     `pushExpEnv` (undefined::OpenExp ((), t1) aenv t2)
+fun2ToC _aenv _ = error "D.A.A.C.Exp.fun2ToC: unreachable"
 
 -- Compile an open embedded scalar expression into a list of C expression whose length corresponds to the number of tuple
 -- components of the embedded type.
