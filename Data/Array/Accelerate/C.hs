@@ -191,7 +191,7 @@ runIO acc
           ; unless ok $
               error $ "Data.Array.Accelerate.C: unable to dynamically load generated code"
           ; logMsg "running..."
-          ; result <- accExec Empty acc'
+          ; result <- accExec EmptyArrs acc'
           ; logMsg "unloading..."
           ; unload oFilePath
           ; logMsgLn "done"
