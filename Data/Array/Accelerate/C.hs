@@ -39,7 +39,6 @@ import System.Posix.Temp
   -- accelerate
 import Data.Array.Accelerate.Analysis.Type as Sugar
 import Data.Array.Accelerate.Array.Sugar   as Sugar
-import Data.Array.Accelerate.AST                        (Val(..))
 import Data.Array.Accelerate.Smart                      (Exp, Acc)
 import Data.Array.Accelerate.Trafo.Sharing              (convertExp, convertAcc)
 import Data.Array.Accelerate.Type

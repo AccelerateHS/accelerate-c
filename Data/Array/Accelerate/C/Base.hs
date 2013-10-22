@@ -20,7 +20,7 @@ module Data.Array.Accelerate.C.Base (
   Env(..), prjEnv, envSize, pushExpEnv, pushAccEnv,
   cvar, ccall, cchar, cintegral, cbool,
   rotateL, rotateR, idiv, uidiv, imod, uimod,
-  cshapeDefs, cdim, cshape, csize, toIndexWithShape
+  cshapeDefs, cdim, cshape, csize, toIndexWithShape, fromIndexWithShape
 ) where
 
   -- libraries
@@ -242,7 +242,18 @@ toIndexWithShape :: Name -> [C.Exp] -> C.Exp
 toIndexWithShape shName is
   = toIndex [(0::Int)..] (reverse is)    -- we use a row-major representation
   where
-    toIndex _dims  []     = [cexp| NULL |]
+    toIndex _dims  []     = [cexp| 0 |]
     toIndex _dims  [i]    = i
-    toIndex (d:ds) (i:is) = [cexp| $exp:(toIndex ds is) * $id:shName.$id:('a':show d) + $exp:i |]
+    toIndex (d:ds) (i:is) = [cexp| $exp:(toIndex ds is) * (* $id:shName).$id:('a':show d) + $exp:i |]
     toIndex _      _      = error "D.A.A.C.Base.toIndexWithShape: oops"
+
+-- Generate code to calculate a multi-dimensional from a linear index (given an array shape).
+--
+fromIndexWithShape :: Name -> Name -> Int -> [C.Exp]
+fromIndexWithShape shName ixName d
+  = [ [cexp| $exp:base % ((* $id:shName).$id:('a':show j)) |] 
+    | j <- [d - 1, d - 2..0]
+    , let base = chain [cexp| $id:ixName |] j
+    ]
+  where
+    chain e j = foldl (\e k -> [cexp| $exp:e / ((* $id:shName).$id:('a':show k)) |]) e [0..j - 1]

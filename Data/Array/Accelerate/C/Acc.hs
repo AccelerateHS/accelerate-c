@@ -53,6 +53,35 @@ accToC aenv' (OpenAcc (Alet bnd body))
 accToC _aenv' (OpenAcc (Use _))
   = [cedecl| int dummy_declaration; |]
 
+accToC aenv' acc@(OpenAcc (Generate _sh f))
+  = [cedecl|
+      void $id:cFunName ( $params:(cresParams ++ cenvParams) )
+      {
+        const typename HsWord64 size = $exp:(csize (accDim acc) accSh);
+        for (typename HsWord64 i = 0; i < size; i++)
+        {
+          $items:assigns
+        }
+      }
+    |]
+  where
+    cresTys    = accTypeToC acc
+    cresNames  = accNames "res" [length cresTys - 1]
+    cresParams = [ [cparam| $ty:t $id:name |] | (t, name) <- zip cresTys cresNames]
+    --
+    cenvParams = aenvToCargs aenv'
+    --
+    shName     = head cresNames
+    accSh       = [cexp| * $id:shName |]    
+    (bnds, es) = fun1ToC aenv' f 
+    assigns    = [ [citem| const $ty:argTy $id:arg = $exp:d; |] 
+                 | (d, (argTy, arg)) <- zip (fromIndexWithShape shName "i" (length bnds)) bnds
+                 ]
+                 ++
+                 [ [citem| $id:resArr [i] = $exp:e; |] 
+                 | (resArr, e) <- zip (tail cresNames) es             -- head is the shape variable
+                 ]
+
 accToC aenv' acc@(OpenAcc (Map f arr))
   = [cedecl|
       void $id:cFunName ( $params:(cresParams ++ cenvParams ++ cargParams) )

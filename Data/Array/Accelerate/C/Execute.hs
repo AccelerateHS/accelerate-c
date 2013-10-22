@@ -1,4 +1,5 @@
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE QuasiQuotes #-}
@@ -22,12 +23,17 @@ module Data.Array.Accelerate.C.Execute (
 ) where
 
   -- standard libraries
+import Control.Applicative hiding (Const)
+import Control.Monad
 import Foreign as Foreign
 
   -- accelerate
 import Data.Array.Accelerate.Array.Data
 import Data.Array.Accelerate.Array.Sugar
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.Interpreter          (evalPrim, evalPrimConst, evalPrj)
+import Data.Array.Accelerate.Array.Representation (SliceIndex(..))
+import Data.Array.Accelerate.Tuple
 
   -- friends
 import Data.Array.Accelerate.C.Base
@@ -66,7 +72,15 @@ accExec aenv (OpenAcc (Avar idx)) = return $ prjValArrs idx aenv
 
 accExec _aenv (OpenAcc (Use arr)) = return $ toArr arr
 
-accExec aenv acc@(OpenAcc (Map f a))
+accExec aenv (OpenAcc (Generate sh _f))
+  = do
+    { sh <- executeExp sh aenv
+    ; resultArr <- allocateArrayIO sh
+    ; invokeAccWithArrs cFunName resultArr aenv
+    ; return resultArr
+    }
+
+accExec aenv (OpenAcc (Map _f a))
   = do
     { argArr    <- accExec aenv a
     ; resultArr <- allocateArrayIO (shape argArr)     -- the result shape of a map is that of the argument array
@@ -75,7 +89,7 @@ accExec aenv acc@(OpenAcc (Map f a))
     ; return resultArr
     }
 
-accExec aenv acc@(OpenAcc (ZipWith f a1 a2))
+accExec aenv (OpenAcc (ZipWith _f a1 a2))
   = do
     { arg1Arr   <- accExec aenv a1
     ; arg2Arr   <- accExec aenv a2
@@ -88,6 +102,96 @@ accExec aenv acc@(OpenAcc (ZipWith f a1 a2))
     }
 
 accExec _ _ = error "D.A.A.C.Execute: unimplemented"
+
+
+-- Scalar expression evaluation
+-- ----------------------------
+
+-- Evaluate a scalar expression.
+--
+--FIXME: This could as well be pure. (Except if we want to implement Foreign properly.)
+executeExp :: Exp aenv t -> ValArrs aenv -> IO t
+executeExp !exp !aenv = executeOpenExp exp Empty aenv
+
+executeOpenExp :: forall env aenv exp. OpenExp env aenv exp -> Val env -> ValArrs aenv -> IO exp
+executeOpenExp !rootExp !env !aenv = travE rootExp
+  where
+    travE :: OpenExp env aenv t -> IO t
+    travE exp = case exp of
+      Var ix                    -> return (prj ix env)
+      Let bnd body              -> travE bnd >>= \x -> executeOpenExp body (env `Push` x) aenv
+      Const c                   -> return (toElt c)
+      PrimConst c               -> return (evalPrimConst c)
+      PrimApp f x               -> evalPrim f <$> travE x
+      Tuple t                   -> toTuple <$> travT t
+      Prj ix e                  -> evalPrj ix . fromTuple <$> travE e
+      Cond p t e                -> travE p >>= \x -> if x then travE t else travE e
+      Iterate n f x             -> join $ iterate f <$> travE n <*> travE x
+      IndexAny                  -> return Any
+      IndexNil                  -> return Z
+      IndexCons sh sz           -> (:.) <$> travE sh <*> travE sz
+      IndexHead sh              -> (\(_  :. ix) -> ix) <$> travE sh
+      IndexTail sh              -> (\(ix :.  _) -> ix) <$> travE sh
+      IndexSlice ix slix sh     -> indexSlice ix <$> travE slix <*> travE sh
+      IndexFull ix slix sl      -> indexFull  ix <$> travE slix <*> travE sl
+      ToIndex sh ix             -> toIndex   <$> travE sh  <*> travE ix
+      FromIndex sh ix           -> fromIndex <$> travE sh  <*> travE ix
+      Intersect sh1 sh2         -> intersect <$> travE sh1 <*> travE sh2
+      ShapeSize sh              -> size  <$> travE sh
+      Shape acc                 -> shape <$> travA acc
+      Index acc ix              -> (!) <$> travA acc <*> travE ix
+      LinearIndex acc ix        -> join $ indexArray <$> travA acc <*> travE ix
+      Foreign _ f x             -> travF1 f x
+
+    -- Helpers
+    -- -------
+
+    travT :: Tuple (OpenExp env aenv) t -> IO t
+    travT tup = case tup of
+      NilTup            -> return ()
+      SnocTup !t !e     -> (,) <$> travT t <*> travE e
+
+    travA :: Arrays a => OpenAcc aenv a -> IO a
+    travA !acc = accExec aenv acc
+
+    travF1 :: Fun () (a -> b) -> OpenExp env aenv a -> IO b
+    travF1 (Lam (Body f)) x = travE x >>= \a -> executeOpenExp f (Empty `Push` a) EmptyArrs
+    travF1 _              _ = error "I bless the rains down in Africa"
+
+    iterate :: OpenExp (env, a) aenv a -> Int -> a -> IO a
+    iterate !f !limit !x
+      = let go !i !acc
+              | i >= limit      = return acc
+              | otherwise       = go (i+1) =<< executeOpenExp f (env `Push` acc) aenv
+        in
+        go 0 x
+
+    indexSlice :: (Elt slix, Elt sh, Elt sl)
+               => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr sh)
+               -> slix
+               -> sh
+               -> sl
+    indexSlice !ix !slix !sh = toElt $! restrict ix (fromElt slix) (fromElt sh)
+      where
+        restrict :: SliceIndex slix sl co sh -> slix -> sh -> sl
+        restrict SliceNil              ()        ()       = ()
+        restrict (SliceAll   sliceIdx) (slx, ()) (sl, sz) = (restrict sliceIdx slx sl, sz)
+        restrict (SliceFixed sliceIdx) (slx,  _) (sl,  _) = restrict sliceIdx slx sl
+
+    indexFull :: (Elt slix, Elt sh, Elt sl)
+              => SliceIndex (EltRepr slix) (EltRepr sl) co (EltRepr sh)
+              -> slix
+              -> sl
+              -> sh
+    indexFull !ix !slix !sl = toElt $! extend ix (fromElt slix) (fromElt sl)
+      where
+        extend :: SliceIndex slix sl co sh -> slix -> sl -> sh
+        extend SliceNil              ()        ()       = ()
+        extend (SliceAll sliceIdx)   (slx, ()) (sh, sz) = (extend sliceIdx slx sh, sz)
+        extend (SliceFixed sliceIdx) (slx, sz) sh       = (extend sliceIdx slx sh, sz)
+
+    indexArray :: (Shape sh, Elt e) => Array sh e -> Int -> IO e
+    indexArray arr ix = return $ arr ! (fromIndex (shape arr) ix)
 
 
 -- Stateful array operations
@@ -197,7 +301,8 @@ invokeAccWithArrs cName resultArr aenv
 
 -- Invoke an external array computation with a variable number of pointer arguments.
 --
-invokeAcc cName NilPL = return ()
+invokeAcc :: String -> PtrList -> IO ()
+invokeAcc _cName NilPL = return ()
 invokeAcc cName (ptr1 ::: NilPL)
   = lookupName cName >>= \f -> mkAcc1Fun f ptr1
 invokeAcc cName (ptr1 ::: ptr2 ::: NilPL)
@@ -216,13 +321,14 @@ invokeAcc cName (ptr1 ::: ptr2 ::: ptr3 ::: ptr4 ::: ptr5 ::: ptr6 ::: ptr7 ::: 
   = lookupName cName >>= \f -> mkAcc8Fun f ptr1 ptr2 ptr3 ptr4 ptr5 ptr6 ptr7 ptr8
 invokeAcc cName (ptr1 ::: ptr2 ::: ptr3 ::: ptr4 ::: ptr5 ::: ptr6 ::: ptr7 ::: ptr8 ::: ptr9 ::: NilPL)
   = lookupName cName >>= \f -> mkAcc9Fun f ptr1 ptr2 ptr3 ptr4 ptr5 ptr6 ptr7 ptr8 ptr9
+invokeAcc _ _ = error "D.A.A.C.Execute.invokeAcc: too many arguments"
 
 -- Obtain the symbol without commiting to a particular type yet.
 --
 lookupName :: Name -> IO (FunPtr a)
 lookupName cName
   = do
-    { mFunPtr <- Load.lookup cFunName
+    { mFunPtr <- Load.lookup cName
     ; case mFunPtr of
         Nothing     -> error "Data.Array.Accelerate.C: unable to dynamically load generated code (lookup)"
         Just funPtr -> return funPtr
