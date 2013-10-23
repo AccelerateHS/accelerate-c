@@ -1,5 +1,5 @@
 Name:                   accelerate-c
-Version:                0.2.0.0
+Version:                0.3.0.0
 Cabal-version:          >= 1.6
 Tested-with:            GHC >= 7.4
 Build-type:             Simple
@@ -30,9 +30,10 @@ Library
                         language-c-quote        >= 0.4.4,
                         mainland-pretty         >= 0.2,
                         process                 >= 1.0,
-                        unix                    >= 2.4,
+                        unix                    >= 2.6,
                         srcloc                  >= 0.2,
                         template-haskell        >= 2.2
+                        transformers            >= 0.3
 
   Exposed-modules:      Data.Array.Accelerate.C
 

@@ -16,7 +16,7 @@
 --
 
 module Data.Array.Accelerate.C.Base (
-  Name, expNames, accNames, cFunName,
+  Name, noName, expNames, accNames, cFunName,
   Env(..), prjEnv, envSize, pushExpEnv, pushAccEnv,
   cvar, ccall, cchar, cintegral, cbool,
   rotateL, rotateR, idiv, uidiv, imod, uimod,
@@ -41,6 +41,10 @@ import Data.Array.Accelerate.C.Type
 -- -----
 
 type Name = String
+
+-- Empty name.
+--
+noName = ""
 
 -- Given a base name and the number of tuple components, yield the component names for a scalar variable.
 --

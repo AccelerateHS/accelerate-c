@@ -36,6 +36,7 @@ import Data.Array.Accelerate.Array.Representation (SliceIndex(..))
 import Data.Array.Accelerate.Tuple
 
   -- friends
+import Data.Array.Accelerate.C.Acc
 import Data.Array.Accelerate.C.Base
 import Data.Array.Accelerate.C.Load as Load
 
@@ -60,36 +61,36 @@ prjValArrs _            _                    = error "D.A.A.C.Execute: inconsist
 -- FIXME: At the moment, only one actual array computation is possible. (There may be additional 'use' and 'let'
 --        constructs, though.)
 --
-accExec :: Arrays arrs => ValArrs aenv -> OpenAcc aenv arrs -> IO arrs
+accExec :: Arrays arrs => ValArrs aenv -> OpenAccWithName aenv arrs -> IO arrs
 
-accExec aenv (OpenAcc (Alet bnd body))
+accExec aenv (OpenAccWithName _ (Alet bnd body))
   = do
     { arrs <- accExec aenv bnd
     ; accExec (aenv `PushArrs` arrs) body
     }
 
-accExec aenv (OpenAcc (Avar idx)) = return $ prjValArrs idx aenv
+accExec aenv (OpenAccWithName _ (Avar idx)) = return $ prjValArrs idx aenv
 
-accExec _aenv (OpenAcc (Use arr)) = return $ toArr arr
+accExec _aenv (OpenAccWithName _ (Use arr)) = return $ toArr arr
 
-accExec aenv (OpenAcc (Generate sh _f))
+accExec aenv (OpenAccWithName cname (Generate sh _f))
   = do
     { sh <- executeExp sh aenv
     ; resultArr <- allocateArrayIO sh
-    ; invokeAccWithArrs cFunName resultArr aenv
+    ; invokeAccWithArrs cname resultArr aenv
     ; return resultArr
     }
 
-accExec aenv (OpenAcc (Map _f a))
+accExec aenv (OpenAccWithName cname (Map _f a))
   = do
     { argArr    <- accExec aenv a
     ; resultArr <- allocateArrayIO (shape argArr)     -- the result shape of a map is that of the argument array
     ; let aenvWithArg = aenv `PushArrs` argArr
-    ; invokeAccWithArrs cFunName resultArr aenvWithArg
+    ; invokeAccWithArrs cname resultArr aenvWithArg
     ; return resultArr
     }
 
-accExec aenv (OpenAcc (ZipWith _f a1 a2))
+accExec aenv (OpenAccWithName cname (ZipWith _f a1 a2))
   = do
     { arg1Arr   <- accExec aenv a1
     ; arg2Arr   <- accExec aenv a2
@@ -97,7 +98,7 @@ accExec aenv (OpenAcc (ZipWith _f a1 a2))
                                     `intersect`
                                     shape arg2Arr)  -- the result shape of a zipWith is the intersection of the argument shapes
     ; let aenvWithArg = aenv `PushArrs` arg1Arr `PushArrs` arg2Arr
-    ; invokeAccWithArrs cFunName resultArr aenvWithArg
+    ; invokeAccWithArrs cname resultArr aenvWithArg
     ; return resultArr
     }
 
@@ -110,13 +111,13 @@ accExec _ _ = error "D.A.A.C.Execute: unimplemented"
 -- Evaluate a scalar expression.
 --
 --FIXME: This could as well be pure. (Except if we want to implement Foreign properly.)
-executeExp :: Exp aenv t -> ValArrs aenv -> IO t
+executeExp :: OpenExpWithName () aenv t -> ValArrs aenv -> IO t
 executeExp !exp !aenv = executeOpenExp exp Empty aenv
 
-executeOpenExp :: forall env aenv exp. OpenExp env aenv exp -> Val env -> ValArrs aenv -> IO exp
+executeOpenExp :: forall env aenv exp. OpenExpWithName env aenv exp -> Val env -> ValArrs aenv -> IO exp
 executeOpenExp !rootExp !env !aenv = travE rootExp
   where
-    travE :: OpenExp env aenv t -> IO t
+    travE :: OpenExpWithName env aenv t -> IO t
     travE exp = case exp of
       Var ix                    -> return (prj ix env)
       Let bnd body              -> travE bnd >>= \x -> executeOpenExp body (env `Push` x) aenv
@@ -146,19 +147,19 @@ executeOpenExp !rootExp !env !aenv = travE rootExp
     -- Helpers
     -- -------
 
-    travT :: Tuple (OpenExp env aenv) t -> IO t
+    travT :: Tuple (OpenExpWithName env aenv) t -> IO t
     travT tup = case tup of
       NilTup            -> return ()
       SnocTup !t !e     -> (,) <$> travT t <*> travE e
 
-    travA :: Arrays a => OpenAcc aenv a -> IO a
+    travA :: Arrays a => OpenAccWithName aenv a -> IO a
     travA !acc = accExec aenv acc
 
-    travF1 :: Fun () (a -> b) -> OpenExp env aenv a -> IO b
+    travF1 :: OpenFunWithName () () (a -> b) -> OpenExpWithName env aenv a -> IO b
     travF1 (Lam (Body f)) x = travE x >>= \a -> executeOpenExp f (Empty `Push` a) EmptyArrs
     travF1 _              _ = error "I bless the rains down in Africa"
 
-    iterate :: OpenExp (env, a) aenv a -> Int -> a -> IO a
+    iterate :: OpenExpWithName (env, a) aenv a -> Int -> a -> IO a
     iterate !f !limit !x
       = let go !i !acc
               | i >= limit      = return acc

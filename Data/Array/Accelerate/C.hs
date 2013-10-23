@@ -163,12 +163,12 @@ runExpIO e
 runIO :: (Shape sh, Elt e) => Acc (Array sh e) -> IO (Array sh e)
 runIO acc
   = do
-    { let acc'     = convertAcc True True True acc
-          cacc     = accToC EmptyEnv acc'
-          cUnit    = [cunit|
-                       $edecls:cshapeDefs
-                       $edecl:cacc
-                     |]
+    { let acc'              = convertAcc True True True acc
+          (cdefs, accNamed) = accToC EmptyEnv acc'
+          cUnit             = [cunit|
+                                $edecls:cshapeDefs
+                                $edecls:cdefs
+                              |]
   
     ; tmpPath <- addTrailingPathSeparator <$> getTemporaryDirectory >>= mkdtemp
     ; logMsgLn $ "Data.Array.Accelerate.C: temporary directory: " ++ tmpPath
@@ -190,7 +190,7 @@ runIO acc
           ; unless ok $
               error $ "Data.Array.Accelerate.C: unable to dynamically load generated code"
           ; logMsg "running..."
-          ; result <- accExec EmptyArrs acc'
+          ; result <- accExec EmptyArrs accNamed
           ; logMsg "unloading..."
           ; unload oFilePath
           ; logMsgLn "done"
