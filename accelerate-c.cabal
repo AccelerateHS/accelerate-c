@@ -32,7 +32,7 @@ Library
                         process                 >= 1.0,
                         unix                    >= 2.6,
                         srcloc                  >= 0.2,
-                        template-haskell        >= 2.2
+                        template-haskell        >= 2.2,
                         transformers            >= 0.3
 
   Exposed-modules:      Data.Array.Accelerate.C

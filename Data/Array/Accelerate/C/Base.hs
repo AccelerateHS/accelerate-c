@@ -44,6 +44,7 @@ type Name = String
 
 -- Empty name.
 --
+noName :: String
 noName = ""
 
 -- Given a base name and the number of tuple components, yield the component names for a scalar variable.

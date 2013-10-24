@@ -98,7 +98,7 @@ accCG aenv' (OpenAcc (Alet bnd body))
   where
     (_, aenv_bnd) = aenv' `pushAccEnv` bnd
 
-accCG aenv' (OpenAcc (Avar ix))
+accCG _aenv' (OpenAcc (Avar ix))
   = return $ OpenAccWithName noName (Avar ix)
 
 accCG _aenv' (OpenAcc (Use arr))
