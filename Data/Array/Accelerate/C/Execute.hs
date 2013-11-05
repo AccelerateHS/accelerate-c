@@ -113,6 +113,16 @@ accExec aenv (OpenAccWithName cname (Fold _f _z a))
     ; return resultArr
     }
 
+accExec aenv (OpenAccWithName cname (Backpermute sh _p a))
+  = do
+    { argArr    <- accExec aenv a
+    ; sh        <- executeExp sh aenv
+    ; resultArr <- allocateArrayIO sh
+    ; let aenvWithArg = aenv `PushArrs` argArr
+    ; invokeAccWithArrs cname resultArr aenvWithArg
+    ; return resultArr
+    }
+
 accExec _ _ = error "D.A.A.C.Execute: unimplemented"
 
 

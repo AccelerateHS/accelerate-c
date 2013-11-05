@@ -285,6 +285,49 @@ accCG aenv' acc@(OpenAcc (Fold f (z::PreExp OpenAcc aenv e) arr))
                    | (zTy, accName, ze) <- zip3 zTys accumNames zes
                    ]
 
+accCG aenv' acc@(OpenAcc (Backpermute sh p arr))
+  = do
+    { arr'    <- accCG aenv' arr
+    ; funName <- newName cFunName
+    ; define $
+        [cedecl|
+          void $id:funName ( $params:(cresParams ++ cenvParams ++ cargParams) )
+          {
+            const typename HsWord64 size = $exp:(csize (accDim acc) accSh);
+            for (typename HsWord64 i = 0; i < size; i++)
+            {
+              $items:assigns
+            }
+          }
+        |]
+    ; return $ OpenAccWithName funName (Backpermute (adaptExp sh) (adaptFun p) arr')
+    }
+  where
+    cresTys    = accTypeToC acc
+    cresNames  = accNames "res" [length cresTys - 1]
+    cresParams = [ [cparam| $ty:t $id:name |] | (t, name) <- zip cresTys cresNames]
+    --
+    cenvParams = aenvToCargs aenv'
+    --
+    cargTys    = accTypeToC arr
+    cargNames  = accNames "arg" [length cargTys - 1]
+    cargParams = [ [cparam| $ty:t $id:name |] | (t, name) <- zip cargTys cargNames]
+    --
+    shName     = head cargNames
+    sh'Name    = head cresNames
+    accSh      = [cexp| * $id:shName |]    
+    (bnds, es) = fun1ToC aenv' p
+    assigns    = [ [citem| const $ty:argTy $id:arg = $exp:d; |] 
+                 | (d, (argTy, arg)) <- zip (fromIndexWithShape sh'Name "i" (length bnds)) bnds
+                 ]
+                 ++
+                 [ [citem| {
+                     typename HsWord64 j = $exp:(toIndexWithShape shName es);
+                     $id:resArr [i] = $id:argArr [j];
+                   } |] 
+                 | (resArr, argArr) <- zip (tail cresNames) (tail cargNames)        -- head is the shape variable
+                 ]
+
 accCG _ _ = error "D.A.A.C.Acc: unimplemented array operation"
 
 type OpenExpWithName = PreOpenExp OpenAccWithName
