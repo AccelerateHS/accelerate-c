@@ -183,7 +183,7 @@ accCG aenv' acc@(OpenAcc (ZipWith f arr1 arr2))
     ; funName <- newName cFunName
     ; define $
         [cedecl|
-          void $id:cFunName ( $params:(cresParams ++ cenvParams ++ carg1Params ++ carg2Params) )
+          void $id:funName ( $params:(cresParams ++ cenvParams ++ carg1Params ++ carg2Params) )
           {
             const typename HsWord64 size = $exp:(csize (accDim acc) accSh);
             for (typename HsWord64 i = 0; i < size; i++)
@@ -222,6 +222,68 @@ accCG aenv' acc@(OpenAcc (ZipWith f arr1 arr2))
                       <- zip6 (tail cresNames) (tail carg1Names) (tail carg2Names)  -- head is the shape variable
                               bnds1 bnds2 es
                   ]
+
+accCG aenv' acc@(OpenAcc (Fold f (z::PreExp OpenAcc aenv e) arr))
+  = do
+    { arr'    <- accCG aenv' arr
+    ; funName <- newName cFunName
+    ; define $
+        -- We iterate over the result shape, and then, execute a separate loop over the innermost dimension of the
+        -- argument, to fold along that dimension per element of the result.
+        [cedecl|
+          void $id:funName ( $params:(cresParams ++ cenvParams ++ cargParams) )
+          {
+            const typename HsWord64 resSize   = $exp:(csize (accDim acc) accSh);
+            const typename Ix       innerSize = $exp:argSh . a0;
+            for (typename HsWord64 i = 0; i < resSize; i++)
+            {
+              $items:initAccum
+              for (typename Ix j = 0; j < innerSize; j++)
+              {
+                $items:assignsAccum
+              }
+              $items:assignsRes
+            }
+          }
+        |]
+    ; return $ OpenAccWithName funName (Fold (adaptFun f) (adaptExp z) arr')
+    }
+  where
+    cresTys      = accTypeToC acc
+    cresNames    = accNames "res" [length cresTys - 1]
+    cresParams   = [ [cparam| $ty:t $id:name |] | (t, name) <- zip cresTys cresNames]
+    --
+    cenvParams   = aenvToCargs aenv'
+    --
+    cargTys      = accTypeToC arr
+    cargNames    = accNames "arg" [length cargTys - 1]
+    cargParams   = [ [cparam| $ty:t $id:name |] | (t, name) <- zip cargTys cargNames]
+    --
+    argSh        = [cexp| * $id:(head cargNames) |]
+    accSh        = [cexp| * $id:(head cresNames) |]
+    (bnds1, 
+     bnds2, 
+     es)         = fun2ToC aenv' f 
+    assignsAccum = [ [citem| {
+                       const $ty:argTy   $id:arg   = $id:argArr [i * innerSize + j];
+                       const $ty:accumTy $id:accum = $id:accumName;
+                       $id:accumName = $exp:e; 
+                     } |] 
+                   | (resArr, argArr, (argTy, arg), (accumTy, accum), accumName, e) 
+                       <- zip6 (tail cresNames) (tail cargNames)  -- head is the shape variable
+                               bnds1 bnds2 accumNames es
+                   ]
+    assignsRes   = [ [citem| $id:resArr [i] = $id:accumName; |]
+                   | (resArr, accumName) <- zip (tail cresNames)  -- head is the shape variable
+                                                accumNames
+                   ]
+    --
+    zTys         = tupleTypeToC (eltType (undefined::e))
+    accumNames   = expNames "accum" (length zTys)
+    zes          = openExpToC EmptyEnv aenv' z
+    initAccum    = [ [citem| $ty:zTy $id:accName = $exp:ze; |]
+                   | (zTy, accName, ze) <- zip3 zTys accumNames zes
+                   ]
 
 accCG _ _ = error "D.A.A.C.Acc: unimplemented array operation"
 

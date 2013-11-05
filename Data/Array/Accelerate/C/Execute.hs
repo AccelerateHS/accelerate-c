@@ -102,6 +102,17 @@ accExec aenv (OpenAccWithName cname (ZipWith _f a1 a2))
     ; return resultArr
     }
 
+accExec aenv (OpenAccWithName cname (Fold _f _z a))
+  = do
+    { argArr    <- accExec aenv a
+        -- the result shape of a fold is that of the argument array with one dimension less
+    ; let resultShape :. _ = shape argArr
+    ; resultArr <- allocateArrayIO resultShape
+    ; let aenvWithArg = aenv `PushArrs` argArr
+    ; invokeAccWithArrs cname resultArr aenvWithArg
+    ; return resultArr
+    }
+
 accExec _ _ = error "D.A.A.C.Execute: unimplemented"
 
 
