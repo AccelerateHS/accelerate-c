@@ -259,7 +259,7 @@ invokeAccWithArrs cName resultArr aenv
     arrToPtrList (Array shRepr arrData)
       = do
         { let sh = toElt shRepr :: sh
-        ; shArr <- Foreign.newArray . map fromIntegral . shapeToList $ sh :: IO (Ptr Word64)   
+        ; shArr <- Foreign.newArray . map fromIntegral . reverse . shapeToList $ sh :: IO (Ptr Word64)   
                                                               -- 'Word64' matches def of 'Ix' in 'C.A.A.C.Base.cshapeDefs'
         ; return (shArr, shArr ::: (wrapTupleList (arrayElt :: ArrayEltR (EltRepr e)) . ptrsOfArrayData $ arrData))
         }
