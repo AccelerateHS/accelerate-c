@@ -1,4 +1,4 @@
-accelerate-c
-============
+Data.Array.Accelerate.C
+=======================
 
-Skeleton for the COMP4181 programming project
+Simple, sequential C backend for Accelerate. This is only partially implemented at the moment.
